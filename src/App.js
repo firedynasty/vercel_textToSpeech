@@ -128,8 +128,12 @@ const TextToSpeechComponent = () => {
         setFiles(newFiles);
         alert('File saved locally!');
       } else {
-        // Use accessCodeInput or default to '123'
-        const codeToUse = accessCodeInput.trim() || '123';
+        // Require '123' to be entered
+        if (accessCodeInput.trim() !== '123') {
+          alert('Please enter access code "123" to save');
+          setIsSaving(false);
+          return;
+        }
 
         const response = await fetch('/api/files', {
           method: 'POST',
@@ -137,7 +141,7 @@ const TextToSpeechComponent = () => {
           body: JSON.stringify({
             filename: filename,
             content: content,
-            accessCode: codeToUse,
+            accessCode: accessCodeInput.trim(),
           }),
         });
 
@@ -173,13 +177,16 @@ const TextToSpeechComponent = () => {
           processTextIntoSentences('');
         }
       } else {
-        // Use accessCodeInput or default to '123'
-        const codeToUse = accessCodeInput.trim() || '123';
+        // Require '123' to be entered
+        if (accessCodeInput.trim() !== '123') {
+          alert('Please enter access code "123" to delete');
+          return;
+        }
 
         const response = await fetch(`/api/files?filename=${encodeURIComponent(filename)}`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accessCode: codeToUse }),
+          body: JSON.stringify({ accessCode: accessCodeInput.trim() }),
         });
 
         if (response.ok) {
@@ -220,6 +227,12 @@ const TextToSpeechComponent = () => {
 
     if (files[newFileName]) {
       alert('A file with this name already exists!');
+      return;
+    }
+
+    // Check access code on production
+    if (!isLocalhost && accessCodeInput.trim() !== '123') {
+      alert('Please enter access code "123" to rename');
       return;
     }
 
