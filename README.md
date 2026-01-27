@@ -1,30 +1,31 @@
-# Getting Started with Create React App
+# vercel_textToSpeech
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Multi-language text-to-speech reader with cloud file storage.
 
-## Available Scripts
+## Features
 
-In the project directory, you can run:
+- **Multi-language TTS**: Supports English, Cantonese, Mandarin, French, Spanish, Korean, and Hebrew
+- **Sentence-based reading**: Automatically splits text into clickable sentences
+- **File management**: Save and load documents with cloud storage via Vercel Blob
+- **Adjustable speed**: Control speech rate (0.7x, 1x, 1.5x)
+- **Sidebar navigation**: Organize and manage multiple text files
 
-### `npm start`
+## Local Development
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+```bash
+npm install
+npm start
+```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console
+Visit `http://localhost:3000`
 
+## Deployment
 
+See [DEPLOYMENT.md](DEPLOYMENT.md) for complete Vercel deployment instructions.
 
-go to src/app.js and rename const (name of app that Claude gives) to app
+## Tech Stack
 
-const App = () => {
-
-
-
-and 
-
-last line export default App;
-
-
-
+- React 18
+- Vercel Blob Storage
+- Web Speech API
+- Vercel Serverless Functions
