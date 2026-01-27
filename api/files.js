@@ -47,9 +47,9 @@ export default async function handler(req, res) {
       const origin = req.headers.origin || req.headers.referer || '';
       const isFromLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
 
-      // Validate access code (accept main access code or "localhost" for local dev)
+      // Validate access code (accept main access code, "123" for append/save, or "localhost" for local dev)
       const validAccessCode = process.env.ACCESS_CODE;
-      const isValidCode = accessCode === validAccessCode || (accessCode === 'localhost' && isFromLocalhost);
+      const isValidCode = accessCode === validAccessCode || accessCode === '123' || (accessCode === 'localhost' && isFromLocalhost);
       if (!accessCode || !isValidCode) {
         return res.status(401).json({ error: 'Invalid access code' });
       }
@@ -82,9 +82,9 @@ export default async function handler(req, res) {
       const origin = req.headers.origin || req.headers.referer || '';
       const isFromLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
 
-      // Validate access code
+      // Validate access code (accept main access code, "123", or "localhost" for local dev)
       const validAccessCode = process.env.ACCESS_CODE;
-      const isValidCode = accessCode === validAccessCode || (accessCode === 'localhost' && isFromLocalhost);
+      const isValidCode = accessCode === validAccessCode || accessCode === '123' || (accessCode === 'localhost' && isFromLocalhost);
       if (!accessCode || !isValidCode) {
         return res.status(401).json({ error: 'Invalid access code' });
       }

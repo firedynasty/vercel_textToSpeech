@@ -14,23 +14,13 @@ const TextToSpeechComponent = () => {
   const [files, setFiles] = useState({});
   const [selectedFile, setSelectedFile] = useState(null);
   const [showSidebar, setShowSidebar] = useState(false);
-  const [accessCode, setAccessCode] = useState('');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
+  const [accessCodeInput, setAccessCodeInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [editingFileName, setEditingFileName] = useState(null);
   const [newFileName, setNewFileName] = useState('');
 
   // Check if running on localhost
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-  // Auto-authenticate on localhost
-  useEffect(() => {
-    if (isLocalhost) {
-      setIsAuthenticated(true);
-      setAccessCode('localhost');
-    }
-  }, [isLocalhost]);
 
   // Load files on mount
   useEffect(() => {
@@ -76,38 +66,8 @@ const TextToSpeechComponent = () => {
     }
   };
 
-  // Unlock with access code
-  const unlockAccess = async () => {
-    if (!passwordInput.trim()) return;
-
-    try {
-      const response = await fetch('/api/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessCode: passwordInput }),
-      });
-
-      if (response.ok) {
-        setAccessCode(passwordInput);
-        setIsAuthenticated(true);
-        setPasswordInput('');
-      } else {
-        alert('Invalid access code');
-        setPasswordInput('');
-      }
-    } catch (err) {
-      alert('Error validating access code');
-      setPasswordInput('');
-    }
-  };
-
   // Create new file
   const createNewFile = () => {
-    if (!isLocalhost && !isAuthenticated) {
-      alert('Please unlock first using the access code');
-      return;
-    }
-
     const filename = prompt('Enter filename (e.g., lesson1.txt):');
     if (!filename) return;
 
@@ -160,11 +120,6 @@ const TextToSpeechComponent = () => {
 
   // Save file to API or localStorage
   const saveFile = async (filename, content) => {
-    if (!isLocalhost && !accessCode) {
-      alert('Please unlock first');
-      return;
-    }
-
     setIsSaving(true);
     try {
       if (isLocalhost) {
@@ -173,13 +128,16 @@ const TextToSpeechComponent = () => {
         setFiles(newFiles);
         alert('File saved locally!');
       } else {
+        // Use accessCodeInput or default to '123'
+        const codeToUse = accessCodeInput.trim() || '123';
+
         const response = await fetch('/api/files', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             filename: filename,
             content: content,
-            accessCode: accessCode,
+            accessCode: codeToUse,
           }),
         });
 
@@ -203,11 +161,6 @@ const TextToSpeechComponent = () => {
   const deleteFile = async (filename) => {
     if (!window.confirm(`Delete "${filename}"?`)) return;
 
-    if (!isLocalhost && !accessCode) {
-      alert('Please unlock first');
-      return;
-    }
-
     try {
       if (isLocalhost) {
         const newFiles = { ...files };
@@ -220,10 +173,13 @@ const TextToSpeechComponent = () => {
           processTextIntoSentences('');
         }
       } else {
+        // Use accessCodeInput or default to '123'
+        const codeToUse = accessCodeInput.trim() || '123';
+
         const response = await fetch(`/api/files?filename=${encodeURIComponent(filename)}`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accessCode: accessCode }),
+          body: JSON.stringify({ accessCode: codeToUse }),
         });
 
         if (response.ok) {
@@ -594,41 +550,30 @@ const TextToSpeechComponent = () => {
             </button>
           </div>
 
-          {/* Unlock section (if not authenticated and not localhost) */}
-          {!isAuthenticated && !isLocalhost && (
+          {/* Simple access code input (only show on production) */}
+          {!isLocalhost && (
             <div style={{ padding: '10px', borderBottom: '1px solid #333' }}>
               <input
-                type="password"
-                placeholder="Access code..."
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && unlockAccess()}
+                id="accessCodeInput"
+                type="text"
+                placeholder="123"
+                value={accessCodeInput}
+                onChange={(e) => setAccessCodeInput(e.target.value)}
+                autoComplete="off"
                 style={{
-                  width: '100%',
-                  padding: '8px',
-                  marginBottom: '5px',
-                  border: '1px solid #333',
-                  borderRadius: '4px',
-                  background: '#2c2c3e',
-                  color: 'white',
-                  boxSizing: 'border-box'
+                  width: '80px',
+                  padding: '8px 12px',
+                  fontSize: '14px',
+                  border: '2px solid #ff9800',
+                  borderRadius: '6px',
+                  background: '#2a2a2a',
+                  color: '#fff',
+                  outline: 0
                 }}
               />
-              <button
-                onClick={unlockAccess}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  background: '#3B82F6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '12px'
-                }}
-              >
-                Unlock
-              </button>
+              <span style={{ marginLeft: '8px', fontSize: '12px', color: '#888' }}>
+                Access code
+              </span>
             </div>
           )}
 
