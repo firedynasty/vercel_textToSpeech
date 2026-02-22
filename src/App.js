@@ -152,6 +152,19 @@ const TextToSpeechComponent = () => {
     }
   };
 
+  // Append clipboard to existing textarea content
+  const handleAppendFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const combined = textareaContent + (textareaContent ? '\n' : '') + text;
+      setTextareaContent(combined);
+      processTextIntoSentences(combined);
+    } catch (err) {
+      console.error('Failed to read clipboard:', err);
+      alert('Failed to read from clipboard. Please paste manually or check permissions.');
+    }
+  };
+
   // Handle textarea change
   const handleTextareaChange = (e) => {
     const text = e.target.value;
@@ -404,6 +417,22 @@ const TextToSpeechComponent = () => {
             }}
           >
             Paste from Clipboard
+          </button>
+
+          <button
+            onClick={handleAppendFromClipboard}
+            style={{
+              padding: '0.5rem 1rem',
+              color: 'white',
+              backgroundColor: '#F59E0B',
+              border: 'none',
+              borderRadius: '0.25rem',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              fontWeight: '600'
+            }}
+          >
+            Append
           </button>
 
           <button
