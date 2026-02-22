@@ -9,22 +9,15 @@ const TextToSpeechComponent = () => {
   const [textareaContent, setTextareaContent] = useState('');
   const [sentences, setSentences] = useState([]);
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(-1);
-
-  // Sidebar and file management state
-  const [files, setFiles] = useState({});
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [showSidebar, setShowSidebar] = useState(false);
-  const [accessCodeInput, setAccessCodeInput] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [editingFileName, setEditingFileName] = useState(null);
-  const [newFileName, setNewFileName] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
   // Check if running on localhost
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 
-  // Load files on mount
+  // Auto-load on mount
   useEffect(() => {
-    loadFiles();
+    loadFromBlob();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -47,215 +40,65 @@ const TextToSpeechComponent = () => {
     };
   }, []);
 
-  // Load files from API or localStorage
-  const loadFiles = async () => {
+  // Load content from cloud or localStorage
+  const loadFromBlob = async () => {
+    setIsLoading(true);
     try {
       if (isLocalhost) {
-        const storedFiles = localStorage.getItem('tts-files');
-        const localFiles = storedFiles ? JSON.parse(storedFiles) : {};
-        setFiles(localFiles);
+        const stored = localStorage.getItem('tts-content');
+        if (stored) {
+          setTextareaContent(stored);
+          processTextIntoSentences(stored);
+        }
       } else {
         const response = await fetch('/api/files');
         if (response.ok) {
           const data = await response.json();
-          setFiles(data.files || {});
+          const content = (data.files || {})['content.txt'];
+          if (content) {
+            setTextareaContent(content);
+            processTextIntoSentences(content);
+          }
         }
       }
     } catch (err) {
-      console.error('Error loading files:', err);
+      console.error('Load error:', err);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Create new file
-  const createNewFile = () => {
-    const filename = prompt('Enter filename (e.g., lesson1.txt):');
-    if (!filename) return;
-
-    let finalName = filename;
-    if (!finalName.includes('.')) {
-      finalName += '.txt';
-    }
-
-    if (files[finalName]) {
-      alert('File already exists!');
-      return;
-    }
-
-    const newFiles = { ...files, [finalName]: '' };
-    setFiles(newFiles);
-    if (isLocalhost) {
-      localStorage.setItem('tts-files', JSON.stringify(newFiles));
-    }
-    setSelectedFile(finalName);
-    setTextareaContent('');
-    processTextIntoSentences('');
-  };
-
-  // Select a file
-  const selectFile = (filename) => {
-    setSelectedFile(filename);
-    const content = files[filename] || '';
-    setTextareaContent(content);
-    processTextIntoSentences(content);
-  };
-
-  // Save current file
-  const saveCurrentFile = async () => {
-    if (!selectedFile) {
-      // Save as new file
-      const filename = prompt('Enter filename (e.g., lesson1.txt):');
-      if (!filename) return;
-
-      let finalName = filename;
-      if (!finalName.includes('.')) {
-        finalName += '.txt';
-      }
-
-      setSelectedFile(finalName);
-      await saveFile(finalName, textareaContent);
-    } else {
-      await saveFile(selectedFile, textareaContent);
-    }
-  };
-
-  // Save file to API or localStorage
-  const saveFile = async (filename, content) => {
+  // Save content to cloud or localStorage
+  const saveToBlob = async () => {
     setIsSaving(true);
     try {
       if (isLocalhost) {
-        const newFiles = { ...files, [filename]: content };
-        localStorage.setItem('tts-files', JSON.stringify(newFiles));
-        setFiles(newFiles);
-        alert('File saved locally!');
+        localStorage.setItem('tts-content', textareaContent);
+        alert('Saved locally!');
       } else {
-        // Require '123' to be entered
-        if (accessCodeInput.trim() !== '123') {
-          alert('Please enter access code "123" to save');
-          setIsSaving(false);
-          return;
-        }
-
         const response = await fetch('/api/files', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            filename: filename,
-            content: content,
-            accessCode: accessCodeInput.trim(),
+            filename: 'content.txt',
+            content: textareaContent,
+            accessCode: '123',
           }),
         });
 
         if (response.ok) {
-          setFiles(prev => ({ ...prev, [filename]: content }));
-          alert('File saved!');
+          alert('Saved to cloud!');
         } else {
           const data = await response.json();
           alert('Error saving: ' + (data.error || 'Unknown error'));
         }
       }
     } catch (err) {
-      console.error('Error saving file:', err);
-      alert('Error saving file');
+      console.error('Save error:', err);
+      alert('Error saving');
     } finally {
       setIsSaving(false);
     }
-  };
-
-  // Delete file
-  const deleteFile = async (filename) => {
-    if (!window.confirm(`Delete "${filename}"?`)) return;
-
-    try {
-      if (isLocalhost) {
-        const newFiles = { ...files };
-        delete newFiles[filename];
-        localStorage.setItem('tts-files', JSON.stringify(newFiles));
-        setFiles(newFiles);
-        if (selectedFile === filename) {
-          setSelectedFile(null);
-          setTextareaContent('');
-          processTextIntoSentences('');
-        }
-      } else {
-        // Require '123' to be entered
-        if (accessCodeInput.trim() !== '123') {
-          alert('Please enter access code "123" to delete');
-          return;
-        }
-
-        const response = await fetch(`/api/files?filename=${encodeURIComponent(filename)}`, {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accessCode: accessCodeInput.trim() }),
-        });
-
-        if (response.ok) {
-          const newFiles = { ...files };
-          delete newFiles[filename];
-          setFiles(newFiles);
-          if (selectedFile === filename) {
-            setSelectedFile(null);
-            setTextareaContent('');
-            processTextIntoSentences('');
-          }
-        } else {
-          alert('Error deleting file');
-        }
-      }
-    } catch (err) {
-      console.error('Error deleting file:', err);
-      alert('Error deleting file');
-    }
-  };
-
-  // Rename file
-  const startRenameFile = (filename) => {
-    setEditingFileName(filename);
-    setNewFileName(filename);
-  };
-
-  const cancelRename = () => {
-    setEditingFileName(null);
-    setNewFileName('');
-  };
-
-  const confirmRename = async () => {
-    if (!newFileName || newFileName === editingFileName) {
-      cancelRename();
-      return;
-    }
-
-    if (files[newFileName]) {
-      alert('A file with this name already exists!');
-      return;
-    }
-
-    // Check access code on production
-    if (!isLocalhost && accessCodeInput.trim() !== '123') {
-      alert('Please enter access code "123" to rename');
-      return;
-    }
-
-    const content = files[editingFileName];
-
-    // Delete old file and create new one
-    if (isLocalhost) {
-      const newFiles = { ...files };
-      delete newFiles[editingFileName];
-      newFiles[newFileName] = content;
-      localStorage.setItem('tts-files', JSON.stringify(newFiles));
-      setFiles(newFiles);
-      if (selectedFile === editingFileName) {
-        setSelectedFile(newFileName);
-      }
-    } else {
-      // Save new file
-      await saveFile(newFileName, content);
-      // Delete old file
-      await deleteFile(editingFileName);
-    }
-
-    cancelRename();
   };
 
   // Process textarea text into sentences
@@ -519,263 +362,8 @@ const TextToSpeechComponent = () => {
 
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh' }}>
-      {/* Sidebar */}
-      {showSidebar && (
-        <div style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          width: '250px',
-          height: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          borderRight: '1px solid #333',
-          zIndex: 100,
-          background: '#1a1a2e'
-        }}>
-          <div style={{
-            padding: '15px 10px',
-            fontSize: '14px',
-            fontWeight: 'bold',
-            borderBottom: '1px solid #333',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            background: '#0d0d1a',
-            color: '#4da6ff'
-          }}>
-            <span>DOCUMENTS</span>
-            <button
-              onClick={() => setShowSidebar(false)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: '5px',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'inherit'
-              }}
-            >
-              ✕
-            </button>
-          </div>
-
-          {/* Simple access code input (only show on production) */}
-          {!isLocalhost && (
-            <div style={{ padding: '10px', borderBottom: '1px solid #333' }}>
-              <input
-                id="accessCodeInput"
-                type="text"
-                placeholder="123"
-                value={accessCodeInput}
-                onChange={(e) => setAccessCodeInput(e.target.value)}
-                autoComplete="off"
-                style={{
-                  width: '80px',
-                  padding: '8px 12px',
-                  fontSize: '14px',
-                  border: '2px solid #ff9800',
-                  borderRadius: '6px',
-                  background: '#2a2a2a',
-                  color: '#fff',
-                  outline: 0
-                }}
-              />
-              <span style={{ marginLeft: '8px', fontSize: '12px', color: '#888' }}>
-                Access code
-              </span>
-            </div>
-          )}
-
-          <button
-            onClick={createNewFile}
-            style={{
-              margin: '10px',
-              padding: '12px 16px',
-              background: '#4CAF50',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              fontSize: '14px',
-              fontWeight: 'bold',
-              cursor: 'pointer'
-            }}
-          >
-            + New File
-          </button>
-
-          <div style={{ flex: 1, overflowY: 'auto', padding: '10px' }}>
-            {Object.keys(files).length === 0 ? (
-              <div style={{ padding: '20px', color: '#888' }}>No files yet</div>
-            ) : (
-              Object.keys(files).sort().map(filename => (
-                <div
-                  key={filename}
-                  style={{
-                    marginBottom: '8px',
-                    padding: '10px',
-                    background: selectedFile === filename ? '#3B82F6' : '#2c2c3e',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    color: 'white'
-                  }}
-                >
-                  {editingFileName === filename ? (
-                    <div style={{ display: 'flex', gap: '4px', flex: 1 }}>
-                      <input
-                        type="text"
-                        value={newFileName}
-                        onChange={(e) => setNewFileName(e.target.value)}
-                        onKeyPress={(e) => e.key === 'Enter' && confirmRename()}
-                        style={{
-                          flex: 1,
-                          padding: '4px',
-                          background: '#1a1a2e',
-                          border: '1px solid #444',
-                          borderRadius: '3px',
-                          color: 'white',
-                          fontSize: '12px'
-                        }}
-                        autoFocus
-                      />
-                      <button
-                        onClick={confirmRename}
-                        style={{
-                          padding: '4px 8px',
-                          background: '#4CAF50',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '3px',
-                          cursor: 'pointer',
-                          fontSize: '11px'
-                        }}
-                      >
-                        ✓
-                      </button>
-                      <button
-                        onClick={cancelRename}
-                        style={{
-                          padding: '4px 8px',
-                          background: '#666',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '3px',
-                          cursor: 'pointer',
-                          fontSize: '11px'
-                        }}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <span
-                        onClick={() => selectFile(filename)}
-                        style={{
-                          flex: 1,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                          fontSize: '13px'
-                        }}
-                      >
-                        {filename}
-                      </span>
-                      <div style={{ display: 'flex', gap: '4px' }}>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            startRenameFile(filename);
-                          }}
-                          title="Edit name"
-                          style={{
-                            padding: '4px 8px',
-                            border: 'none',
-                            borderRadius: '4px',
-                            background: '#2196F3',
-                            color: 'white',
-                            cursor: 'pointer',
-                            fontSize: '12px'
-                          }}
-                        >
-                          ✏️
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            deleteFile(filename);
-                          }}
-                          title="Delete entry"
-                          style={{
-                            padding: '4px 8px',
-                            border: 'none',
-                            borderRadius: '4px',
-                            background: '#f44336',
-                            color: 'white',
-                            cursor: 'pointer',
-                            fontSize: '12px'
-                          }}
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-
-          <button
-            onClick={loadFiles}
-            style={{
-              margin: '10px',
-              padding: '10px 16px',
-              background: '#2196F3',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              fontSize: '13px',
-              cursor: 'pointer'
-            }}
-          >
-            Refresh
-          </button>
-        </div>
-      )}
-
       {/* Main content */}
-      <div style={{ flex: 1, padding: '1rem', overflowY: 'auto', marginLeft: showSidebar ? '250px' : '0' }}>
-        {/* Toggle Sidebar Button */}
-        <button
-          onClick={() => setShowSidebar(!showSidebar)}
-          style={{
-            marginBottom: '1rem',
-            padding: '8px 16px',
-            background: '#2196F3',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '14px'
-          }}
-        >
-          {showSidebar ? '← Hide Files' : '→ Show Files'}
-        </button>
-
-        {/* Current file indicator */}
-        {selectedFile && (
-          <div style={{ marginBottom: '1rem', fontSize: '14px', color: '#666' }}>
-            <strong>Current file:</strong> {selectedFile}
-          </div>
-        )}
-
+      <div style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
         <h1>React TTS Component - Multi-Language Test</h1>
 
         {/* Text Input Section */}
@@ -819,20 +407,37 @@ const TextToSpeechComponent = () => {
           </button>
 
           <button
-            onClick={saveCurrentFile}
-            disabled={isSaving}
+            onClick={loadFromBlob}
+            disabled={isLoading}
             style={{
-              padding: '0.5rem 1rem',
-              color: 'white',
-              backgroundColor: isSaving ? '#666' : '#3B82F6',
+              padding: '8px 16px',
+              background: 'rgba(76, 175, 80, 0.3)',
               border: 'none',
-              borderRadius: '0.25rem',
-              cursor: isSaving ? 'not-allowed' : 'pointer',
-              fontSize: '1rem',
-              fontWeight: '600'
+              borderRadius: '6px',
+              cursor: isLoading ? 'not-allowed' : 'pointer',
+              fontWeight: 'bold',
+              color: 'white',
+              fontSize: '1rem'
             }}
           >
-            {isSaving ? 'Saving...' : '💾 Save File'}
+            {isLoading ? 'Loading...' : 'Load'}
+          </button>
+
+          <button
+            onClick={saveToBlob}
+            disabled={isSaving}
+            style={{
+              padding: '8px 16px',
+              background: 'rgba(76, 175, 80, 0.3)',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: isSaving ? 'not-allowed' : 'pointer',
+              fontWeight: 'bold',
+              color: 'white',
+              fontSize: '1rem'
+            }}
+          >
+            {isSaving ? 'Saving...' : 'Save'}
           </button>
         </div>
 
