@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const TextToSpeechComponent = () => {
   const [selectedLanguage, setSelectedLanguage] = useState('en-US');
@@ -11,6 +11,12 @@ const TextToSpeechComponent = () => {
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(-1);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [autoAdvance, setAutoAdvance] = useState(true);
+  const autoAdvanceRef = useRef(true);
+  autoAdvanceRef.current = autoAdvance;
+  const sentencesRef = useRef([]);
+  sentencesRef.current = sentences;
+  const speakSentenceRef = useRef(null);
 
   // Check if running on localhost
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -370,8 +376,20 @@ const TextToSpeechComponent = () => {
       }
     }
 
+    utterance.onend = () => {
+      if (autoAdvanceRef.current) {
+        const nextIndex = index + 1;
+        if (nextIndex < sentencesRef.current.length) {
+          setTimeout(() => {
+            speakSentenceRef.current(sentencesRef.current[nextIndex], nextIndex);
+          }, 300);
+        }
+      }
+    };
+
     speechSynthesis.speak(utterance);
   };
+  speakSentenceRef.current = speakSentence;
 
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh' }}>
@@ -468,6 +486,35 @@ const TextToSpeechComponent = () => {
           >
             {isSaving ? 'Saving...' : 'Save'}
           </button>
+        </div>
+
+        {/* Auto-advance toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.75rem', padding: '8px', backgroundColor: autoAdvance ? '#e6ffe6' : '#f0f0f0', borderRadius: '8px' }}>
+          <span style={{ fontWeight: 'bold', fontSize: '12px', color: '#666' }}>Stop After Line</span>
+          <label style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={autoAdvance}
+              onChange={(e) => setAutoAdvance(e.target.checked)}
+              style={{ opacity: 0, width: 0, height: 0 }}
+            />
+            <span style={{
+              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+              backgroundColor: autoAdvance ? '#4CAF50' : '#ddd',
+              transition: '.4s', borderRadius: '24px'
+            }}>
+              <span style={{
+                position: 'absolute', content: '""',
+                height: '18px', width: '18px',
+                left: autoAdvance ? '29px' : '3px',
+                bottom: '3px',
+                backgroundColor: 'white',
+                transition: '.4s', borderRadius: '50%',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
+              }} />
+            </span>
+          </label>
+          <span style={{ fontWeight: 'bold', fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#666' }}>Auto Next Line</span>
         </div>
 
         {/* Reading Area - Clickable Sentence Divs */}
