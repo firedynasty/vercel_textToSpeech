@@ -488,8 +488,8 @@ const TextToSpeechComponent = () => {
           </button>
         </div>
 
-        {/* Auto-advance toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.75rem', padding: '8px', backgroundColor: autoAdvance ? '#e6ffe6' : '#f0f0f0', borderRadius: '8px' }}>
+        {/* Auto-advance toggle - sticky navbar */}
+        <div style={{ position: 'sticky', top: 0, zIndex: 100, display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.75rem', padding: '8px 12px', backgroundColor: autoAdvance ? '#e6ffe6' : '#f0f0f0', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
           <span style={{ fontWeight: 'bold', fontSize: '12px', color: '#666' }}>Stop After Line</span>
           <label style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px', cursor: 'pointer' }}>
             <input
