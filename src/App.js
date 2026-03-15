@@ -182,6 +182,9 @@ const TextToSpeechComponent = () => {
   const speakSentence = (sentenceText, index) => {
     if (!sentenceText) return;
 
+    // Cancel any current/queued speech immediately
+    speechSynthesis.cancel();
+
     setCurrentSentenceIndex(index);
 
     const utterance = new SpeechSynthesisUtterance(sentenceText);
