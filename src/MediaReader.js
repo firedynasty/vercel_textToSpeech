@@ -14,6 +14,10 @@ const MediaReader = () => {
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [autoAdvance, setAutoAdvance] = useState(true);
+  const [speakAfterAdvance, setSpeakAfterAdvance] = useState(false);
+  const autoAdvanceRef = useRef(autoAdvance);
+  autoAdvanceRef.current = autoAdvance;
   const videoRef = useRef(null);
 
   // ... rest of the component remains the same ...
@@ -207,6 +211,26 @@ const MediaReader = () => {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [handleKeyPress]);
 
+  // Auto-speak the next file after advancing
+  useEffect(() => {
+    if (speakAfterAdvance && currentTextFile && files[currentTextFile]) {
+      setSpeakAfterAdvance(false);
+      const text = files[currentTextFile].content;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = /[\u4e00-\u9fff]/.test(text) ? 'zh-HK' : 'en-US';
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => {
+        setIsSpeaking(false);
+        if (autoAdvanceRef.current) {
+          goToNextText();
+          setSpeakAfterAdvance(true);
+        }
+      };
+      utterance.onerror = () => setIsSpeaking(false);
+      speechSynthesis.speak(utterance);
+    }
+  }, [speakAfterAdvance, currentTextFile, files, goToNextText]);
+
   const speakText = () => {
     if (!currentTextFile || !files[currentTextFile]) return;
     
@@ -244,7 +268,13 @@ const MediaReader = () => {
     }
     
     utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      if (autoAdvanceRef.current) {
+        goToNextText();
+        setSpeakAfterAdvance(true);
+      }
+    };
     utterance.onerror = (e) => {
       console.log('TTS Error:', e);
       setIsSpeaking(false);
@@ -330,6 +360,19 @@ const MediaReader = () => {
                   >
                     <Speaker className="w-4 h-4" />
                   </Button>
+
+                  <label className="flex items-center gap-1 cursor-pointer ml-2" title="Auto-advance to next file after reading">
+                    <input
+                      type="checkbox"
+                      checked={autoAdvance}
+                      onChange={(e) => setAutoAdvance(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="relative w-9 h-5 bg-gray-300 peer-checked:bg-green-500 rounded-full transition-colors">
+                      <div className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${autoAdvance ? 'translate-x-4' : ''}`} />
+                    </div>
+                    <span className="text-[10px] text-gray-500">{autoAdvance ? 'Auto' : 'Stop'}</span>
+                  </label>
                 </div>
 
                 {currentTextFile && (
