@@ -17,6 +17,7 @@ const TextToSpeechComponent = () => {
   const sentencesRef = useRef([]);
   sentencesRef.current = sentences;
   const speakSentenceRef = useRef(null);
+  const textareaRef = useRef(null);
 
   // Check if running on localhost
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -152,6 +153,10 @@ const TextToSpeechComponent = () => {
       const text = await navigator.clipboard.readText();
       setTextareaContent(text);
       processTextIntoSentences(text);
+      // Scroll back up to the textarea
+      if (textareaRef.current) {
+        textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     } catch (err) {
       console.error('Failed to read clipboard:', err);
       alert('Failed to read from clipboard. Please paste manually or check permissions.');
@@ -396,6 +401,43 @@ const TextToSpeechComponent = () => {
 
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh' }}>
+      {/* Left sidebar - hover to read sentences */}
+      {sentences.length > 0 && (
+        <div style={{
+          width: '300px',
+          minWidth: '300px',
+          height: '100vh',
+          overflowY: 'auto',
+          borderRight: '2px solid #dee2e6',
+          backgroundColor: '#f8f9fa',
+          padding: '0.5rem'
+        }}>
+          <div style={{ padding: '0.5rem', marginBottom: '0.5rem', fontSize: '12px', fontWeight: 'bold', color: '#666', borderBottom: '1px solid #dee2e6' }}>
+            Hover to read ({sentences.length} sentences)
+          </div>
+          {sentences.map((sentence, index) => (
+            <div
+              key={index}
+              onMouseEnter={() => speakSentence(sentence, index)}
+              style={{
+                padding: '0.75rem',
+                marginBottom: '0.5rem',
+                cursor: 'pointer',
+                borderRadius: '0.25rem',
+                backgroundColor: currentSentenceIndex === index ? '#ffd43b' : 'transparent',
+                transition: 'background-color 0.2s',
+                fontWeight: currentSentenceIndex === index ? 'bold' : 'normal',
+                boxShadow: currentSentenceIndex === index ? '0 0 5px rgba(255, 212, 59, 0.5)' : 'none',
+                fontSize: '0.95rem',
+                lineHeight: '1.6'
+              }}
+            >
+              {sentence}.
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Main content */}
       <div style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
         <h1>React TTS Component - Multi-Language Test</h1>
@@ -406,6 +448,7 @@ const TextToSpeechComponent = () => {
 
         <div style={{ marginBottom: '1rem' }}>
           <textarea
+            ref={textareaRef}
             placeholder="Paste your text here or click 'Paste from Clipboard' to automatically get clipboard content..."
             value={textareaContent}
             onChange={handleTextareaChange}
@@ -518,6 +561,23 @@ const TextToSpeechComponent = () => {
             </span>
           </label>
           <span style={{ fontWeight: 'bold', fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#666' }}>Auto Next Line</span>
+
+          <button
+            onClick={handlePasteFromClipboard}
+            style={{
+              marginLeft: 'auto',
+              padding: '4px 12px',
+              color: 'white',
+              backgroundColor: '#10B981',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '600'
+            }}
+          >
+            Paste from Clipboard
+          </button>
         </div>
 
         {/* Reading Area - Clickable Sentence Divs */}
