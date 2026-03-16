@@ -18,6 +18,9 @@ const TextToSpeechComponent = () => {
   sentencesRef.current = sentences;
   const speakSentenceRef = useRef(null);
   const textareaRef = useRef(null);
+  const currentSentenceIndexRef = useRef(-1);
+  currentSentenceIndexRef.current = currentSentenceIndex;
+  const sidebarEnteredRef = useRef(false);
 
   // Check if running on localhost
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -187,10 +190,13 @@ const TextToSpeechComponent = () => {
   const speakSentence = (sentenceText, index) => {
     if (!sentenceText) return;
 
+    console.log(`[speakSentence] called with index=${index}, text="${sentenceText.substring(0, 50)}..."`);
+
     // Cancel any current/queued speech immediately
     speechSynthesis.cancel();
 
     setCurrentSentenceIndex(index);
+    console.log(`[speakSentence] setCurrentSentenceIndex(${index})`);
 
     const utterance = new SpeechSynthesisUtterance(sentenceText);
     utterance.lang = selectedLanguage;
@@ -385,8 +391,10 @@ const TextToSpeechComponent = () => {
     }
 
     utterance.onend = () => {
+      console.log(`[onend] finished index=${index}, autoAdvance=${autoAdvanceRef.current}`);
       if (autoAdvanceRef.current) {
         const nextIndex = index + 1;
+        console.log(`[onend] advancing to nextIndex=${nextIndex}, total=${sentencesRef.current.length}`);
         if (nextIndex < sentencesRef.current.length) {
           setTimeout(() => {
             speakSentenceRef.current(sentencesRef.current[nextIndex], nextIndex);
@@ -399,14 +407,23 @@ const TextToSpeechComponent = () => {
   };
   speakSentenceRef.current = speakSentence;
 
+  console.log(`[render] currentSentenceIndex=${currentSentenceIndex}, sentences.length=${sentences.length}`);
+
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh' }}>
       {/* Left sidebar - hover to resume reading from last highlighted sentence */}
       {sentences.length > 0 && (
         <div
           onMouseEnter={() => {
-            const idx = currentSentenceIndex >= 0 ? currentSentenceIndex : 0;
+            if (sidebarEnteredRef.current) return;
+            sidebarEnteredRef.current = true;
+            const idx = currentSentenceIndexRef.current >= 0 ? currentSentenceIndexRef.current : 0;
+            console.log(`[sidebar hover] ENTER, starting from idx=${idx}`);
             speakSentence(sentencesRef.current[idx], idx);
+          }}
+          onMouseLeave={() => {
+            console.log(`[sidebar hover] LEAVE`);
+            sidebarEnteredRef.current = false;
           }}
           style={{
             width: '50px',
@@ -532,7 +549,7 @@ const TextToSpeechComponent = () => {
         {/* Auto-advance toggle - sticky navbar */}
         <div style={{ position: 'sticky', top: 0, zIndex: 100, display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.75rem', padding: '8px 12px', backgroundColor: autoAdvance ? '#e6ffe6' : '#f0f0f0', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
           <span
-            onMouseEnter={() => setAutoAdvance(false)}
+            onMouseEnter={() => { console.log('[navbar] Stop After Line hovered → autoAdvance=false'); setAutoAdvance(false); }}
             style={{ fontWeight: 'bold', fontSize: '12px', color: '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: !autoAdvance ? '#ffcdd2' : 'transparent' }}
           >Stop After Line</span>
           <label style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px', cursor: 'pointer' }}>
@@ -608,15 +625,9 @@ const TextToSpeechComponent = () => {
                     fontWeight: currentSentenceIndex === index ? 'bold' : 'normal',
                     boxShadow: currentSentenceIndex === index ? '0 0 5px rgba(255, 212, 59, 0.5)' : 'none'
                   }}
-                  onMouseEnter={(e) => {
-                    if (currentSentenceIndex !== index) {
-                      e.currentTarget.style.backgroundColor = '#e9ecef';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (currentSentenceIndex !== index) {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }
+                  onMouseEnter={() => {
+                    console.log(`[sentence hover] marking index=${index}`);
+                    setCurrentSentenceIndex(index);
                   }}
                 >
                   {sentence}.
