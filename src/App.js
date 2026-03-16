@@ -406,26 +406,30 @@ const TextToSpeechComponent = () => {
         <div
           onMouseEnter={() => {
             const idx = currentSentenceIndex >= 0 ? currentSentenceIndex : 0;
-            speakSentence(sentences[idx], idx);
+            speakSentence(sentencesRef.current[idx], idx);
           }}
           style={{
-            width: '40px',
-            minWidth: '40px',
+            width: '50px',
+            minWidth: '50px',
             height: '100vh',
             backgroundColor: '#e0e0e0',
             borderRight: '2px solid #ccc',
             cursor: 'pointer',
             display: 'flex',
+            flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            writingMode: 'vertical-rl',
-            textOrientation: 'mixed',
-            fontSize: '11px',
-            color: '#666',
+            gap: '4px',
             userSelect: 'none'
           }}
         >
-          {currentSentenceIndex >= 0 ? `▶ ${currentSentenceIndex + 1}/${sentences.length}` : '▶ Hover'}
+          <div style={{ fontSize: '18px' }}>▶</div>
+          <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#333' }}>
+            {currentSentenceIndex >= 0 ? currentSentenceIndex + 1 : '—'}
+          </div>
+          <div style={{ fontSize: '10px', color: '#666' }}>
+            / {sentences.length}
+          </div>
         </div>
       )}
 
@@ -527,7 +531,10 @@ const TextToSpeechComponent = () => {
 
         {/* Auto-advance toggle - sticky navbar */}
         <div style={{ position: 'sticky', top: 0, zIndex: 100, display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.75rem', padding: '8px 12px', backgroundColor: autoAdvance ? '#e6ffe6' : '#f0f0f0', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-          <span style={{ fontWeight: 'bold', fontSize: '12px', color: '#666' }}>Stop After Line</span>
+          <span
+            onMouseEnter={() => setAutoAdvance(false)}
+            style={{ fontWeight: 'bold', fontSize: '12px', color: '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: !autoAdvance ? '#ffcdd2' : 'transparent' }}
+          >Stop After Line</span>
           <label style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px', cursor: 'pointer' }}>
             <input
               type="checkbox"
@@ -551,7 +558,10 @@ const TextToSpeechComponent = () => {
               }} />
             </span>
           </label>
-          <span style={{ fontWeight: 'bold', fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#666' }}>Auto Next Line</span>
+          <span
+            onMouseEnter={() => setAutoAdvance(true)}
+            style={{ fontWeight: 'bold', fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: autoAdvance ? '#c8e6c9' : 'transparent' }}
+          >Auto Next Line</span>
 
           <button
             onClick={handlePasteFromClipboard}
