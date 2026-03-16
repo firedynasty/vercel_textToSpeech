@@ -401,40 +401,31 @@ const TextToSpeechComponent = () => {
 
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh' }}>
-      {/* Left sidebar - hover to read sentences */}
+      {/* Left sidebar - hover to resume reading from last highlighted sentence */}
       {sentences.length > 0 && (
-        <div style={{
-          width: '300px',
-          minWidth: '300px',
-          height: '100vh',
-          overflowY: 'auto',
-          borderRight: '2px solid #dee2e6',
-          backgroundColor: '#f8f9fa',
-          padding: '0.5rem'
-        }}>
-          <div style={{ padding: '0.5rem', marginBottom: '0.5rem', fontSize: '12px', fontWeight: 'bold', color: '#666', borderBottom: '1px solid #dee2e6' }}>
-            Hover to read ({sentences.length} sentences)
-          </div>
-          {sentences.map((sentence, index) => (
-            <div
-              key={index}
-              onMouseEnter={() => speakSentence(sentence, index)}
-              style={{
-                padding: '0.75rem',
-                marginBottom: '0.5rem',
-                cursor: 'pointer',
-                borderRadius: '0.25rem',
-                backgroundColor: currentSentenceIndex === index ? '#ffd43b' : 'transparent',
-                transition: 'background-color 0.2s',
-                fontWeight: currentSentenceIndex === index ? 'bold' : 'normal',
-                boxShadow: currentSentenceIndex === index ? '0 0 5px rgba(255, 212, 59, 0.5)' : 'none',
-                fontSize: '0.95rem',
-                lineHeight: '1.6'
-              }}
-            >
-              {sentence}.
-            </div>
-          ))}
+        <div
+          onMouseEnter={() => {
+            const idx = currentSentenceIndex >= 0 ? currentSentenceIndex : 0;
+            speakSentence(sentences[idx], idx);
+          }}
+          style={{
+            width: '40px',
+            minWidth: '40px',
+            height: '100vh',
+            backgroundColor: '#e0e0e0',
+            borderRight: '2px solid #ccc',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            writingMode: 'vertical-rl',
+            textOrientation: 'mixed',
+            fontSize: '11px',
+            color: '#666',
+            userSelect: 'none'
+          }}
+        >
+          {currentSentenceIndex >= 0 ? `▶ ${currentSentenceIndex + 1}/${sentences.length}` : '▶ Hover'}
         </div>
       )}
 
