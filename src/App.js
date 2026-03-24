@@ -21,6 +21,8 @@ const TextToSpeechComponent = () => {
   const currentSentenceIndexRef = useRef(-1);
   currentSentenceIndexRef.current = currentSentenceIndex;
   const sidebarEnteredRef = useRef(false);
+  const [darkMode, setDarkMode] = useState(false);
+  const darkModeToggleCooldownRef = useRef(false);
 
   // Check if running on localhost
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -48,6 +50,18 @@ const TextToSpeechComponent = () => {
     return () => {
       speechSynthesis.removeEventListener('voiceschanged', loadVoices);
     };
+  }, []);
+
+  // Escape key focuses textarea so user can Cmd+V paste
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   // Load content from cloud or localStorage
@@ -151,7 +165,7 @@ const TextToSpeechComponent = () => {
   };
 
   // Paste from clipboard
-  const handlePasteFromClipboard = async () => {
+  const handlePasteFromClipboard = async ({ startReading = false } = {}) => {
     try {
       const text = await navigator.clipboard.readText();
       setTextareaContent(text);
@@ -159,6 +173,15 @@ const TextToSpeechComponent = () => {
       // Scroll back up to the textarea
       if (textareaRef.current) {
         textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      // Start reading from the first sentence if requested
+      if (startReading && text && text.trim()) {
+        const newSentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
+        if (newSentences.length > 0) {
+          setTimeout(() => {
+            speakSentenceRef.current(sentencesRef.current[0], 0);
+          }, 100);
+        }
       }
     } catch (err) {
       console.error('Failed to read clipboard:', err);
@@ -184,6 +207,44 @@ const TextToSpeechComponent = () => {
     const text = e.target.value;
     setTextareaContent(text);
     processTextIntoSentences(text);
+  };
+
+  // Handle paste in textarea - auto-start reading
+  const handleTextareaPaste = (e) => {
+    const pastedText = e.clipboardData.getData('text');
+    if (pastedText && pastedText.trim()) {
+      // Let the paste happen, then start reading after state updates
+      setTimeout(() => {
+        speakSentenceRef.current(sentencesRef.current[0], 0);
+      }, 200);
+    }
+  };
+
+  // Toggle dark mode with 1000ms cooldown
+  const handleDarkModeToggle = () => {
+    if (darkModeToggleCooldownRef.current) return;
+    darkModeToggleCooldownRef.current = true;
+    setDarkMode(prev => !prev);
+    setTimeout(() => { darkModeToggleCooldownRef.current = false; }, 1000);
+  };
+
+  // Theme colors
+  const theme = darkMode ? {
+    bg: '#1a1a2e', text: '#e0e0e0', textSecondary: '#999',
+    border: '#333', inputBg: '#16213e', inputBorder: '#444',
+    cardBg: '#16213e', cardBorder: '#333',
+    sectionBg: '#0f3460', sectionBorder: '#1a5276',
+    highlight: '#e6a817', sidebarBg: '#2a2a4a', sidebarBorder: '#444',
+    navbarBg: '#2a2a4a', heading: '#7ec8e3',
+    btnPaste: '#059669', btnAppend: '#d97706',
+  } : {
+    bg: '#ffffff', text: '#000000', textSecondary: '#666',
+    border: '#ccc', inputBg: '#ffffff', inputBorder: '#ccc',
+    cardBg: '#f8f9fa', cardBorder: '#dee2e6',
+    sectionBg: '#f0f9ff', sectionBorder: '#3B82F6',
+    highlight: '#ffd43b', sidebarBg: '#e0e0e0', sidebarBorder: '#ccc',
+    navbarBg: autoAdvance ? '#e6ffe6' : '#f0f0f0', heading: '#1e40af',
+    btnPaste: '#10B981', btnAppend: '#F59E0B',
   };
 
   // Speak a sentence
@@ -410,7 +471,7 @@ const TextToSpeechComponent = () => {
   console.log(`[render] currentSentenceIndex=${currentSentenceIndex}, sentences.length=${sentences.length}`);
 
   return (
-    <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh' }}>
+    <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh', backgroundColor: theme.bg, color: theme.text }}>
       {/* Left sidebar - hover to resume reading from last highlighted sentence */}
       {sentences.length > 0 && (
         <div
@@ -429,8 +490,8 @@ const TextToSpeechComponent = () => {
             width: '50px',
             minWidth: '50px',
             height: '100vh',
-            backgroundColor: '#e0e0e0',
-            borderRight: '2px solid #ccc',
+            backgroundColor: theme.sidebarBg,
+            borderRight: `2px solid ${theme.sidebarBorder}`,
             cursor: 'pointer',
             display: 'flex',
             flexDirection: 'column',
@@ -441,10 +502,10 @@ const TextToSpeechComponent = () => {
           }}
         >
           <div style={{ fontSize: '18px' }}>▶</div>
-          <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#333' }}>
+          <div style={{ fontSize: '14px', fontWeight: 'bold', color: theme.text }}>
             {currentSentenceIndex >= 0 ? currentSentenceIndex + 1 : '—'}
           </div>
-          <div style={{ fontSize: '10px', color: '#666' }}>
+          <div style={{ fontSize: '10px', color: theme.textSecondary }}>
             / {sentences.length}
           </div>
         </div>
@@ -455,8 +516,8 @@ const TextToSpeechComponent = () => {
         <h1>React TTS Component - Multi-Language Test</h1>
 
         {/* Text Input Section */}
-      <div style={{ marginBottom: '2rem', padding: '1rem', border: '2px solid #3B82F6', borderRadius: '0.5rem', backgroundColor: '#f0f9ff' }}>
-        <h2 style={{ marginTop: 0, color: '#1e40af' }}>Text-to-Speech Reader</h2>
+      <div style={{ marginBottom: '2rem', padding: '1rem', border: `2px solid ${theme.sectionBorder}`, borderRadius: '0.5rem', backgroundColor: theme.sectionBg }}>
+        <h2 style={{ marginTop: 0, color: theme.heading }}>Text-to-Speech Reader</h2>
 
         <div style={{ marginBottom: '1rem' }}>
           <textarea
@@ -464,16 +525,19 @@ const TextToSpeechComponent = () => {
             placeholder="Paste your text here or click 'Paste from Clipboard' to automatically get clipboard content..."
             value={textareaContent}
             onChange={handleTextareaChange}
+            onPaste={handleTextareaPaste}
             style={{
               width: '100%',
               minHeight: '120px',
               padding: '0.75rem',
-              border: '1px solid #ccc',
+              border: `1px solid ${theme.inputBorder}`,
               borderRadius: '0.25rem',
               fontFamily: 'inherit',
               fontSize: '1rem',
               resize: 'vertical',
-              boxSizing: 'border-box'
+              boxSizing: 'border-box',
+              backgroundColor: theme.inputBg,
+              color: theme.text
             }}
           />
         </div>
@@ -547,7 +611,7 @@ const TextToSpeechComponent = () => {
         </div>
 
         {/* Auto-advance toggle - sticky navbar */}
-        <div style={{ position: 'sticky', top: 0, zIndex: 100, display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.75rem', padding: '8px 12px', backgroundColor: autoAdvance ? '#e6ffe6' : '#f0f0f0', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 100, display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.75rem', padding: '8px 12px', backgroundColor: theme.navbarBg, borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
           <span
             onMouseEnter={() => { console.log('[navbar] Stop After Line hovered → autoAdvance=false'); setAutoAdvance(false); }}
             style={{ fontWeight: 'bold', fontSize: '12px', color: '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: !autoAdvance ? '#ffcdd2' : 'transparent' }}
@@ -596,15 +660,32 @@ const TextToSpeechComponent = () => {
           >
             Paste from Clipboard
           </button>
+
+          <span
+            onMouseEnter={handleDarkModeToggle}
+            style={{
+              padding: '4px 12px',
+              color: 'white',
+              backgroundColor: darkMode ? '#f59e0b' : '#374151',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '600',
+              userSelect: 'none'
+            }}
+          >
+            {darkMode ? 'Light' : 'Dark'}
+          </span>
         </div>
 
         {/* Reading Area - Clickable Sentence Divs */}
         {sentences.length > 0 && (
           <div style={{ marginTop: '1.5rem' }}>
-            <h3 style={{ color: '#1e40af' }}>Click any sentence to read it aloud:</h3>
+            <h3 style={{ color: theme.heading }}>Click any sentence to read it aloud:</h3>
             <div style={{
-              backgroundColor: '#f8f9fa',
-              border: '2px solid #dee2e6',
+              backgroundColor: theme.cardBg,
+              border: `2px solid ${theme.cardBorder}`,
               borderRadius: '0.5rem',
               padding: '1.5rem',
               minHeight: '200px',
@@ -620,10 +701,11 @@ const TextToSpeechComponent = () => {
                     marginBottom: '0.5rem',
                     cursor: 'pointer',
                     borderRadius: '0.25rem',
-                    backgroundColor: currentSentenceIndex === index ? '#ffd43b' : 'transparent',
+                    backgroundColor: currentSentenceIndex === index ? theme.highlight : 'transparent',
                     transition: 'background-color 0.2s',
                     fontWeight: currentSentenceIndex === index ? 'bold' : 'normal',
-                    boxShadow: currentSentenceIndex === index ? '0 0 5px rgba(255, 212, 59, 0.5)' : 'none'
+                    boxShadow: currentSentenceIndex === index ? `0 0 5px ${theme.highlight}80` : 'none',
+                    color: currentSentenceIndex === index ? '#000' : theme.text
                   }}
                   onMouseEnter={() => {
                     console.log(`[sentence hover] marking index=${index}`);
@@ -634,7 +716,7 @@ const TextToSpeechComponent = () => {
                 </div>
               ))}
             </div>
-            <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#666' }}>
+            <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: theme.textSecondary }}>
               {sentences.length} sentences detected
             </p>
           </div>
@@ -648,7 +730,7 @@ const TextToSpeechComponent = () => {
           id="languageSelect" 
           value={selectedLanguage} 
           onChange={(e) => setSelectedLanguage(e.target.value)}
-          style={{ padding: '0.5rem', border: '1px solid #ccc', borderRadius: '0.25rem' }}
+          style={{ padding: '0.5rem', border: `1px solid ${theme.inputBorder}`, borderRadius: '0.25rem', backgroundColor: theme.inputBg, color: theme.text }}
         >
           <option value="zh-HK">Cantonese</option>
           <option value="en-US">English</option>
@@ -663,7 +745,7 @@ const TextToSpeechComponent = () => {
           id="rateSelect" 
           value={speechRate} 
           onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
-          style={{ padding: '0.5rem', border: '1px solid #ccc', borderRadius: '0.25rem' }}
+          style={{ padding: '0.5rem', border: `1px solid ${theme.inputBorder}`, borderRadius: '0.25rem', backgroundColor: theme.inputBg, color: theme.text }}
         >
           <option value="1">1x</option>
           <option value="1.5">1.5x</option>
@@ -672,7 +754,7 @@ const TextToSpeechComponent = () => {
       </div>
 
         {/* Debug Info */}
-        <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: '#666' }}>
+        <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: theme.textSecondary }}>
           <p>Available voices: {availableVoices.length}</p>
           <p>Current language: {selectedLanguage}</p>
           <p>Speech rate: {speechRate}x</p>
