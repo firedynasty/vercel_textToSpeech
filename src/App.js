@@ -22,6 +22,7 @@ const TextToSpeechComponent = () => {
   currentSentenceIndexRef.current = currentSentenceIndex;
   const sidebarEnteredRef = useRef(false);
   const [darkMode, setDarkMode] = useState(false);
+  const [fontSize, setFontSize] = useState(1.1);
   const darkModeToggleCooldownRef = useRef(false);
 
   // Check if running on localhost
@@ -608,6 +609,38 @@ const TextToSpeechComponent = () => {
           >
             {isSaving ? 'Saving...' : 'Save'}
           </button>
+
+          <button
+            onClick={() => setFontSize(prev => Math.max(0.5, prev - 0.1))}
+            style={{
+              padding: '8px 14px',
+              background: '#6366f1',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              color: 'white',
+              fontSize: '1.1rem'
+            }}
+          >
+            -
+          </button>
+
+          <button
+            onClick={() => setFontSize(prev => Math.min(3, prev + 0.1))}
+            style={{
+              padding: '8px 14px',
+              background: '#6366f1',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              color: 'white',
+              fontSize: '1.1rem'
+            }}
+          >
+            +
+          </button>
         </div>
 
         {/* Auto-advance toggle - sticky navbar */}
@@ -689,7 +722,7 @@ const TextToSpeechComponent = () => {
               borderRadius: '0.5rem',
               padding: '1.5rem',
               minHeight: '200px',
-              fontSize: '1.1rem',
+              fontSize: `${fontSize}rem`,
               lineHeight: '1.8'
             }}>
               {sentences.map((sentence, index) => (
