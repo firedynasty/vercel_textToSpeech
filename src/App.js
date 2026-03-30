@@ -515,8 +515,8 @@ const TextToSpeechComponent = () => {
             sidebarEnteredRef.current = false;
           }}
           style={{
-            width: '50px',
-            minWidth: '50px',
+            width: '400px',
+            minWidth: '400px',
             height: '100vh',
             backgroundColor: theme.sidebarBg,
             borderRight: `2px solid ${theme.sidebarBorder}`,
