@@ -1,6 +1,8 @@
 {
   "rewrites": [
     { "source": "/api/:path*", "destination": "/api/:path*" },
+    { "source": "/youtubetranscriptreader.html", "destination": "/youtubetranscriptreader.html" },
+    { "source": "/textToSpeechCodepenVersion.html", "destination": "/textToSpeechCodepenVersion.html" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

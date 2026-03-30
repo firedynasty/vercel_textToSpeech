@@ -641,6 +641,25 @@ const TextToSpeechComponent = () => {
           >
             +
           </button>
+
+          <a
+            href="/youtubetranscriptreader.html"
+            style={{
+              padding: '8px 14px',
+              background: '#6366f1',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              color: 'white',
+              fontSize: '1.1rem',
+              textDecoration: 'none',
+              display: 'inline-block'
+            }}
+            title="YouTube Transcript Reader"
+          >
+            📖▶
+          </a>
         </div>
 
         {/* Auto-advance toggle - sticky navbar */}
