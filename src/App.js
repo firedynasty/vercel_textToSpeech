@@ -126,6 +126,24 @@ const TextToSpeechComponent = () => {
     }
   };
 
+  // Strip markdown formatting from pasted text
+  const stripMarkdown = (text) => {
+    return text
+      .replace(/^#{1,6}\s+/gm, '')        // headers: ## Heading
+      .replace(/^>\s?/gm, '')              // blockquotes: > text
+      .replace(/^---+$/gm, '')             // horizontal rules: ---
+      .replace(/\*\*\*(.+?)\*\*\*/g, '$1') // bold+italic: ***text***
+      .replace(/\*\*(.+?)\*\*/g, '$1')    // bold: **text**
+      .replace(/\*(.+?)\*/g, '$1')        // italic: *text*
+      .replace(/^[-*+]\s+/gm, '')         // unordered list items: - item
+      .replace(/^\d+\.\s+/gm, '')         // ordered list items: 1. item
+      .replace(/`{3}[\s\S]*?`{3}/g, '')   // code blocks: ```...```
+      .replace(/`(.+?)`/g, '$1')          // inline code: `code`
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links: [text](url)
+      .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1') // images: ![alt](url)
+      .replace(/\n{3,}/g, '\n\n');         // collapse excessive newlines
+  };
+
   // Process textarea text into sentences
   const processTextIntoSentences = (text) => {
     if (!text || !text.trim()) {
@@ -168,7 +186,8 @@ const TextToSpeechComponent = () => {
   // Paste from clipboard
   const handlePasteFromClipboard = async ({ startReading = false } = {}) => {
     try {
-      const text = await navigator.clipboard.readText();
+      const raw = await navigator.clipboard.readText();
+      const text = stripMarkdown(raw);
       setTextareaContent(text);
       processTextIntoSentences(text);
       // Scroll back up to the textarea
@@ -193,7 +212,8 @@ const TextToSpeechComponent = () => {
   // Append clipboard to existing textarea content
   const handleAppendFromClipboard = async () => {
     try {
-      const text = await navigator.clipboard.readText();
+      const raw = await navigator.clipboard.readText();
+      const text = stripMarkdown(raw);
       const combined = textareaContent + (textareaContent ? '\n' : '') + text;
       setTextareaContent(combined);
       processTextIntoSentences(combined);
@@ -210,11 +230,18 @@ const TextToSpeechComponent = () => {
     processTextIntoSentences(text);
   };
 
-  // Handle paste in textarea - auto-start reading
+  // Handle paste in textarea - auto-start reading, strip markdown
   const handleTextareaPaste = (e) => {
     const pastedText = e.clipboardData.getData('text');
     if (pastedText && pastedText.trim()) {
-      // Let the paste happen, then start reading after state updates
+      e.preventDefault();
+      const cleaned = stripMarkdown(pastedText);
+      const newText = textareaContent
+        ? textareaContent.substring(0, e.target.selectionStart) + cleaned + textareaContent.substring(e.target.selectionEnd)
+        : cleaned;
+      setTextareaContent(newText);
+      processTextIntoSentences(newText);
+      // Start reading after state updates
       setTimeout(() => {
         speakSentenceRef.current(sentencesRef.current[0], 0);
       }, 200);
