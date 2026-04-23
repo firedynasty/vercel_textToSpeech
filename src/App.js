@@ -302,10 +302,6 @@ const TextToSpeechComponent = () => {
         : cleaned;
       setTextareaContent(newText);
       processTextIntoSentences(newText);
-      // Start reading after state updates
-      setTimeout(() => {
-        speakSentenceRef.current(sentencesRef.current[0], 0);
-      }, 200);
     }
   };
 
