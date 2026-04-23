@@ -16,9 +16,21 @@ const MediaReader = () => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [autoAdvance, setAutoAdvance] = useState(true);
   const [speakAfterAdvance, setSpeakAfterAdvance] = useState(false);
+  const [ttsEngine, setTtsEngine] = useState(() => localStorage.getItem('mediaTtsEngine') || 'browser');
+  const [openaiVoice, setOpenaiVoice] = useState(() => localStorage.getItem('mediaOpenaiVoice') || 'onyx');
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
+  const [apiKeyValue, setApiKeyValue] = useState(() => {
+    const key = localStorage.getItem('OPENAI_API_KEY') || '';
+    return key ? '••••' + key.slice(-4) : '';
+  });
   const autoAdvanceRef = useRef(autoAdvance);
   autoAdvanceRef.current = autoAdvance;
+  const ttsEngineRef = useRef(ttsEngine);
+  ttsEngineRef.current = ttsEngine;
+  const openaiVoiceRef = useRef(openaiVoice);
+  openaiVoiceRef.current = openaiVoice;
   const videoRef = useRef(null);
+  const currentAudioRef = useRef(null);
 
   // ... rest of the component remains the same ...
   const sortedFiles = useMemo(() => {
@@ -211,75 +223,140 @@ const MediaReader = () => {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [handleKeyPress]);
 
+  // Speak text using OpenAI TTS API
+  const speakWithOpenAI = useCallback(async (text, { onEnd, onError } = {}) => {
+    const apiKey = localStorage.getItem('OPENAI_API_KEY') || '';
+    if (!apiKey) {
+      console.warn('OPENAI_API_KEY not found in localStorage');
+      if (onError) onError(new Error('No API key'));
+      return;
+    }
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    try {
+      setIsSpeaking(true);
+      const resp = await fetch('https://api.openai.com/v1/audio/speech', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+        body: JSON.stringify({ model: 'tts-1', input: text, voice: openaiVoiceRef.current, speed: 1.0 })
+      });
+      if (!resp.ok) {
+        console.error('OpenAI TTS error:', resp.status, await resp.text());
+        setIsSpeaking(false);
+        if (onError) onError(new Error('OpenAI error ' + resp.status));
+        return;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      currentAudioRef.current = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        currentAudioRef.current = null;
+        setIsSpeaking(false);
+        if (onEnd) onEnd();
+      };
+      audio.onerror = (e) => {
+        URL.revokeObjectURL(url);
+        currentAudioRef.current = null;
+        setIsSpeaking(false);
+        if (onError) onError(e);
+      };
+      audio.play();
+    } catch (err) {
+      console.error('OpenAI TTS fetch error:', err);
+      setIsSpeaking(false);
+      if (onError) onError(err);
+    }
+  }, []);
+
   // Auto-speak the next file after advancing
   useEffect(() => {
     if (speakAfterAdvance && currentTextFile && files[currentTextFile]) {
       setSpeakAfterAdvance(false);
       const text = files[currentTextFile].content;
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = /[\u4e00-\u9fff]/.test(text) ? 'zh-HK' : 'en-US';
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => {
+      const handleEnd = () => {
         setIsSpeaking(false);
         if (autoAdvanceRef.current) {
           goToNextText();
           setSpeakAfterAdvance(true);
         }
       };
-      utterance.onerror = () => setIsSpeaking(false);
-      speechSynthesis.speak(utterance);
+
+      if (ttsEngineRef.current === 'openai') {
+        speakWithOpenAI(text, { onEnd: handleEnd, onError: () => setIsSpeaking(false) });
+      } else {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = /[\u4e00-\u9fff]/.test(text) ? 'zh-HK' : 'en-US';
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = handleEnd;
+        utterance.onerror = () => setIsSpeaking(false);
+        speechSynthesis.speak(utterance);
+      }
     }
-  }, [speakAfterAdvance, currentTextFile, files, goToNextText]);
+  }, [speakAfterAdvance, currentTextFile, files, goToNextText, speakWithOpenAI]);
 
   const speakText = () => {
     if (!currentTextFile || !files[currentTextFile]) return;
-    
+
     if (isSpeaking) {
       speechSynthesis.cancel();
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
       setIsSpeaking(false);
       return;
     }
 
     const text = files[currentTextFile].content;
-    const utterance = new SpeechSynthesisUtterance(text);
-    
-    // Detect Chinese characters and try multiple language codes
-    const hasChinese = /[\u4e00-\u9fff]/.test(text);
-    if (hasChinese) {
-      // Try different Chinese language codes for Samsung compatibility
-      const voices = speechSynthesis.getVoices();
-      const chineseVoice = voices.find(voice => 
-        voice.lang.includes('zh') || 
-        voice.lang.includes('cmn') || 
-        voice.name.toLowerCase().includes('chinese') ||
-        voice.name.toLowerCase().includes('mandarin') ||
-        voice.name.toLowerCase().includes('cantonese')
-      );
-      
-      if (chineseVoice) {
-        utterance.voice = chineseVoice;
-        utterance.lang = chineseVoice.lang;
-      } else {
-        // Fallback language codes
-        utterance.lang = 'zh-HK'; // Try Cantonese first, then others
-      }
-    } else {
-      utterance.lang = 'en-US';
-    }
-    
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => {
+    const handleEnd = () => {
       setIsSpeaking(false);
       if (autoAdvanceRef.current) {
         goToNextText();
         setSpeakAfterAdvance(true);
       }
     };
+
+    // === OpenAI TTS ===
+    if (ttsEngineRef.current === 'openai') {
+      speakWithOpenAI(text, { onEnd: handleEnd, onError: (e) => { console.log('TTS Error:', e); setIsSpeaking(false); } });
+      return;
+    }
+
+    // === Browser TTS ===
+    const utterance = new SpeechSynthesisUtterance(text);
+
+    const hasChinese = /[\u4e00-\u9fff]/.test(text);
+    if (hasChinese) {
+      const voices = speechSynthesis.getVoices();
+      const chineseVoice = voices.find(voice =>
+        voice.lang.includes('zh') ||
+        voice.lang.includes('cmn') ||
+        voice.name.toLowerCase().includes('chinese') ||
+        voice.name.toLowerCase().includes('mandarin') ||
+        voice.name.toLowerCase().includes('cantonese')
+      );
+
+      if (chineseVoice) {
+        utterance.voice = chineseVoice;
+        utterance.lang = chineseVoice.lang;
+      } else {
+        utterance.lang = 'zh-HK';
+      }
+    } else {
+      utterance.lang = 'en-US';
+    }
+
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = handleEnd;
     utterance.onerror = (e) => {
       console.log('TTS Error:', e);
       setIsSpeaking(false);
     };
-    
+
     speechSynthesis.speak(utterance);
   };
 
@@ -360,6 +437,73 @@ const MediaReader = () => {
                   >
                     <Speaker className="w-4 h-4" />
                   </Button>
+
+                  {/* TTS Engine Toggle */}
+                  <button
+                    onClick={() => {
+                      const next = ttsEngine === 'browser' ? 'openai' : 'browser';
+                      setTtsEngine(next);
+                      localStorage.setItem('mediaTtsEngine', next);
+                    }}
+                    className={`px-2 py-1 rounded text-xs font-semibold ${
+                      ttsEngine === 'openai' ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                    }`}
+                    title={ttsEngine === 'openai' ? 'Using OpenAI TTS (click for browser)' : 'Using browser TTS (click for OpenAI)'}
+                  >
+                    {ttsEngine === 'openai' ? 'AI' : 'TTS'}
+                  </button>
+
+                  {/* OpenAI voice + key - only when OpenAI active */}
+                  {ttsEngine === 'openai' && (
+                    <>
+                      <select
+                        value={openaiVoice}
+                        onChange={(e) => { setOpenaiVoice(e.target.value); localStorage.setItem('mediaOpenaiVoice', e.target.value); }}
+                        className="px-1 py-1 rounded text-xs border border-green-400 bg-green-50 text-green-800"
+                        title="Select OpenAI voice"
+                      >
+                        <option value="onyx">Onyx</option>
+                        <option value="nova">Nova</option>
+                        <option value="alloy">Alloy</option>
+                        <option value="echo">Echo</option>
+                        <option value="fable">Fable</option>
+                        <option value="shimmer">Shimmer</option>
+                      </select>
+                      <button
+                        onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+                        className={`px-1.5 py-1 rounded text-xs font-semibold ${
+                          localStorage.getItem('OPENAI_API_KEY') ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-red-100 text-red-700 hover:bg-red-200'
+                        }`}
+                        title={localStorage.getItem('OPENAI_API_KEY') ? 'API key set — click to change' : 'No API key — click to enter'}
+                      >
+                        Key
+                      </button>
+                      {showApiKeyInput && (
+                        <input
+                          type="text"
+                          placeholder="sk-..."
+                          value={apiKeyValue}
+                          onFocus={() => { if (apiKeyValue.startsWith('••••')) setApiKeyValue(''); }}
+                          onChange={(e) => setApiKeyValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && apiKeyValue && !apiKeyValue.startsWith('••••')) {
+                              localStorage.setItem('OPENAI_API_KEY', apiKeyValue);
+                              setApiKeyValue('••••' + apiKeyValue.slice(-4));
+                              setShowApiKeyInput(false);
+                            }
+                          }}
+                          onBlur={() => {
+                            if (apiKeyValue && !apiKeyValue.startsWith('••••')) {
+                              localStorage.setItem('OPENAI_API_KEY', apiKeyValue);
+                              setApiKeyValue('••••' + apiKeyValue.slice(-4));
+                            }
+                          }}
+                          className="px-1.5 py-1 rounded text-xs border border-green-400 bg-white text-gray-800 w-36"
+                          title="Paste OpenAI API key and press Enter"
+                        />
+                      )}
+                    </>
+                  )}
 
                   <label className="flex items-center gap-1 cursor-pointer ml-2" title="Auto-advance to next file after reading">
                     <input
