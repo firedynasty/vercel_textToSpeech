@@ -11,7 +11,7 @@ const TextToSpeechComponent = () => {
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(-1);
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [autoAdvance, setAutoAdvance] = useState(true);
+  const [autoAdvance, setAutoAdvance] = useState(false);
   const autoAdvanceRef = useRef(true);
   autoAdvanceRef.current = autoAdvance;
   const sentencesRef = useRef([]);
@@ -20,10 +20,71 @@ const TextToSpeechComponent = () => {
   const textareaRef = useRef(null);
   const currentSentenceIndexRef = useRef(-1);
   currentSentenceIndexRef.current = currentSentenceIndex;
-  const sidebarEnteredRef = useRef(false);
   const [darkMode, setDarkMode] = useState(false);
   const [fontSize, setFontSize] = useState(1.1);
   const darkModeToggleCooldownRef = useRef(false);
+  const [interactionMode, setInteractionMode] = useState('tts'); // 'tts' or 'cursive'
+  const [cursiveSpeed, setCursiveSpeed] = useState(() => parseInt(localStorage.getItem('tts-cursive-speed') ?? '3'));
+  const [cursiveSize, setCursiveSize] = useState(() => parseInt(localStorage.getItem('tts-cursive-size') ?? '52'));
+  const cursiveOutputRef = useRef(null);
+  const cursiveTimerRef = useRef(null);
+  const [ttsEngine, setTtsEngine] = useState(() => localStorage.getItem('appTtsEngine') || 'browser');
+  const [openaiVoice, setOpenaiVoice] = useState(() => localStorage.getItem('appOpenaiVoice') || 'onyx');
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
+  const [apiKeyValue, setApiKeyValue] = useState(() => {
+    const key = localStorage.getItem('OPENAI_API_KEY') || '';
+    return key ? '••••' + key.slice(-4) : '';
+  });
+  const ttsEngineRef = useRef('browser');
+  ttsEngineRef.current = ttsEngine;
+  const openaiVoiceRef = useRef('onyx');
+  openaiVoiceRef.current = openaiVoice;
+  const currentAudioRef = useRef(null);
+
+  // Load cursive font
+  useEffect(() => {
+    if (!document.getElementById('cursive-font-link')) {
+      const link = document.createElement('link');
+      link.id = 'cursive-font-link';
+      link.rel = 'stylesheet';
+      link.href = 'https://fonts.googleapis.com/css2?family=Alex+Brush&display=swap';
+      document.head.appendChild(link);
+    }
+  }, []);
+
+  // Animate text in cursive style
+  const animateCursive = (text) => {
+    if (!cursiveOutputRef.current || !text) return;
+    // Stop any existing animation
+    if (cursiveTimerRef.current) { clearTimeout(cursiveTimerRef.current); cursiveTimerRef.current = null; }
+
+    const outputEl = cursiveOutputRef.current;
+    outputEl.innerHTML = '';
+    outputEl.scrollTop = 0;
+
+    const fadeMs = [700, 500, 350, 220, 120][cursiveSpeed - 1];
+    const delayMs = [600, 420, 280, 170, 90][cursiveSpeed - 1];
+
+    const words = text.split(/\s+/).filter(Boolean);
+    const spans = words.map((word, i) => {
+      const sp = document.createElement('span');
+      sp.style.cssText = `display:inline;opacity:0;transition:opacity ${fadeMs}ms ease`;
+      sp.textContent = i < words.length - 1 ? word + ' ' : word;
+      outputEl.appendChild(sp);
+      return sp;
+    });
+
+    let i = 0;
+    function next() {
+      if (i >= spans.length) { cursiveTimerRef.current = null; return; }
+      spans[i].style.opacity = '1';
+      const nearBottom = outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 80;
+      if (nearBottom) outputEl.scrollTop = outputEl.scrollHeight;
+      i++;
+      cursiveTimerRef.current = setTimeout(next, delayMs);
+    }
+    next();
+  };
 
   // Check if running on localhost
   const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -151,8 +212,8 @@ const TextToSpeechComponent = () => {
       return;
     }
 
-    // Split by sentence endings (., !, ?)
-    const allRawSentences = text.split(/[.!?]+/).filter(sentence => sentence.trim().length > 0);
+    // Split by sentence endings (., !, ?) and newlines
+    const allRawSentences = text.split(/[.!?\n]+/).filter(sentence => sentence.trim().length > 0);
 
     // Consolidate short sentences (< 15 characters)
     const consolidatedSentences = [];
@@ -275,6 +336,52 @@ const TextToSpeechComponent = () => {
     btnPaste: '#10B981', btnAppend: '#F59E0B',
   };
 
+  // Speak text using OpenAI TTS API
+  const speakWithOpenAI = (text, { onEnd, onError } = {}) => {
+    const apiKey = localStorage.getItem('OPENAI_API_KEY') || '';
+    if (!apiKey) {
+      console.warn('OPENAI_API_KEY not found in localStorage');
+      if (onError) onError(new Error('No API key'));
+      return;
+    }
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    (async () => {
+      try {
+        const resp = await fetch('https://api.openai.com/v1/audio/speech', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+          body: JSON.stringify({ model: 'tts-1', input: text, voice: openaiVoiceRef.current, speed: 1.0 })
+        });
+        if (!resp.ok) {
+          console.error('OpenAI TTS error:', resp.status, await resp.text());
+          if (onError) onError(new Error('OpenAI error ' + resp.status));
+          return;
+        }
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        currentAudioRef.current = audio;
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          currentAudioRef.current = null;
+          if (onEnd) onEnd();
+        };
+        audio.onerror = (e) => {
+          URL.revokeObjectURL(url);
+          currentAudioRef.current = null;
+          if (onError) onError(e);
+        };
+        audio.play();
+      } catch (err) {
+        console.error('OpenAI TTS fetch error:', err);
+        if (onError) onError(err);
+      }
+    })();
+  };
+
   // Speak a sentence
   const speakSentence = (sentenceText, index) => {
     if (!sentenceText) return;
@@ -283,10 +390,34 @@ const TextToSpeechComponent = () => {
 
     // Cancel any current/queued speech immediately
     speechSynthesis.cancel();
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
 
     setCurrentSentenceIndex(index);
     console.log(`[speakSentence] setCurrentSentenceIndex(${index})`);
 
+    // === OpenAI TTS ===
+    if (ttsEngineRef.current === 'openai') {
+      speakWithOpenAI(sentenceText, {
+        onEnd: () => {
+          console.log(`[onend openai] finished index=${index}, autoAdvance=${autoAdvanceRef.current}`);
+          if (autoAdvanceRef.current) {
+            const nextIndex = index + 1;
+            if (nextIndex < sentencesRef.current.length) {
+              setTimeout(() => {
+                speakSentenceRef.current(sentencesRef.current[nextIndex], nextIndex);
+              }, 300);
+            }
+          }
+        },
+        onError: (e) => console.error('OpenAI TTS error:', e)
+      });
+      return;
+    }
+
+    // === Browser TTS ===
     const utterance = new SpeechSynthesisUtterance(sentenceText);
     utterance.lang = selectedLanguage;
     utterance.rate = speechRate;
@@ -500,45 +631,6 @@ const TextToSpeechComponent = () => {
 
   return (
     <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh', backgroundColor: theme.bg, color: theme.text }}>
-      {/* Left sidebar - hover to resume reading from last highlighted sentence */}
-      {sentences.length > 0 && (
-        <div
-          onMouseEnter={() => {
-            if (sidebarEnteredRef.current) return;
-            sidebarEnteredRef.current = true;
-            const idx = currentSentenceIndexRef.current >= 0 ? currentSentenceIndexRef.current : 0;
-            console.log(`[sidebar hover] ENTER, starting from idx=${idx}`);
-            speakSentence(sentencesRef.current[idx], idx);
-          }}
-          onMouseLeave={() => {
-            console.log(`[sidebar hover] LEAVE`);
-            sidebarEnteredRef.current = false;
-          }}
-          style={{
-            width: '400px',
-            minWidth: '400px',
-            height: '100vh',
-            backgroundColor: theme.sidebarBg,
-            borderRight: `2px solid ${theme.sidebarBorder}`,
-            cursor: 'pointer',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '4px',
-            userSelect: 'none'
-          }}
-        >
-          <div style={{ fontSize: '18px' }}>▶</div>
-          <div style={{ fontSize: '14px', fontWeight: 'bold', color: theme.text }}>
-            {currentSentenceIndex >= 0 ? currentSentenceIndex + 1 : '—'}
-          </div>
-          <div style={{ fontSize: '10px', color: theme.textSecondary }}>
-            / {sentences.length}
-          </div>
-        </div>
-      )}
-
       {/* Main content */}
       <div style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
         <h1>React TTS Component - Multi-Language Test</h1>
@@ -689,10 +781,12 @@ const TextToSpeechComponent = () => {
           </a>
         </div>
 
-        {/* Auto-advance toggle - sticky navbar */}
-        <div style={{ position: 'sticky', top: 0, zIndex: 100, display: 'flex', alignItems: 'center', gap: '10px', marginTop: '0.75rem', padding: '8px 12px', backgroundColor: theme.navbarBg, borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+        {/* Sticky container for navbar + cursive output */}
+        <div style={{ position: 'sticky', top: 0, zIndex: 100, marginTop: '0.75rem' }}>
+        {/* Auto-advance toggle - navbar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', backgroundColor: theme.navbarBg, borderRadius: interactionMode === 'cursive' ? '8px 8px 0 0' : '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
           <span
-            onMouseEnter={() => { console.log('[navbar] Stop After Line hovered → autoAdvance=false'); setAutoAdvance(false); }}
+            onClick={() => { console.log('[navbar] Stop After Line clicked → autoAdvance=false'); setAutoAdvance(false); }}
             style={{ fontWeight: 'bold', fontSize: '12px', color: '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: !autoAdvance ? '#ffcdd2' : 'transparent' }}
           >Stop After Line</span>
           <label style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px', cursor: 'pointer' }}>
@@ -719,9 +813,49 @@ const TextToSpeechComponent = () => {
             </span>
           </label>
           <span
-            onMouseEnter={() => setAutoAdvance(true)}
+            onClick={() => setAutoAdvance(true)}
             style={{ fontWeight: 'bold', fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: autoAdvance ? '#c8e6c9' : 'transparent' }}
           >Auto Next Line</span>
+
+          {/* TTS / Cursive mode toggle */}
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '8px', borderLeft: '1px solid #ccc', paddingLeft: '10px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '12px', fontWeight: interactionMode === 'tts' ? 'bold' : 'normal', color: interactionMode === 'tts' ? '#2563eb' : '#666' }}>
+              <input type="radio" name="mode" value="tts" checked={interactionMode === 'tts'} onChange={() => setInteractionMode('tts')} style={{ margin: 0 }} />
+              TTS
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '12px', fontWeight: interactionMode === 'cursive' ? 'bold' : 'normal', color: interactionMode === 'cursive' ? '#8b4513' : '#666' }}>
+              <input type="radio" name="mode" value="cursive" checked={interactionMode === 'cursive'} onChange={() => setInteractionMode('cursive')} style={{ margin: 0 }} />
+              Cursive
+            </label>
+            {interactionMode === 'cursive' && (
+              <>
+                <label style={{ fontSize: '10px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                  Spd
+                  <input type="range" min="1" max="5" value={cursiveSpeed}
+                    onChange={(e) => { const v = parseInt(e.target.value); setCursiveSpeed(v); localStorage.setItem('tts-cursive-speed', v); }}
+                    style={{ width: '50px', accentColor: '#8b4513' }} />
+                </label>
+                <label style={{ fontSize: '10px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                  Size
+                  <input type="range" min="28" max="80" value={cursiveSize}
+                    onChange={(e) => { const v = parseInt(e.target.value); setCursiveSize(v); localStorage.setItem('tts-cursive-size', v); }}
+                    style={{ width: '50px', accentColor: '#8b4513' }} />
+                </label>
+                <button
+                  onClick={() => {
+                    const nextIndex = currentSentenceIndex + 1;
+                    if (nextIndex < sentences.length) {
+                      setCurrentSentenceIndex(nextIndex);
+                      animateCursive(sentences[nextIndex]);
+                    }
+                  }}
+                  disabled={currentSentenceIndex >= sentences.length - 1}
+                  title="Next sentence"
+                  style={{ padding: '0 8px', border: '1px solid #c9b99a', borderRadius: 2, background: '#8b4513', color: '#f5f0e8', fontSize: 12, lineHeight: 1, cursor: 'pointer' }}
+                >▼</button>
+              </>
+            )}
+          </span>
 
           <button
             onClick={handlePasteFromClipboard}
@@ -741,7 +875,7 @@ const TextToSpeechComponent = () => {
           </button>
 
           <span
-            onMouseEnter={handleDarkModeToggle}
+            onClick={handleDarkModeToggle}
             style={{
               padding: '4px 12px',
               color: 'white',
@@ -756,12 +890,121 @@ const TextToSpeechComponent = () => {
           >
             {darkMode ? 'Light' : 'Dark'}
           </span>
+
+          {/* TTS Engine Toggle */}
+          <button
+            onClick={() => {
+              const next = ttsEngine === 'browser' ? 'openai' : 'browser';
+              setTtsEngine(next);
+              localStorage.setItem('appTtsEngine', next);
+            }}
+            style={{
+              padding: '4px 12px',
+              color: 'white',
+              backgroundColor: ttsEngine === 'openai' ? '#16a34a' : '#6b7280',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '600'
+            }}
+            title={ttsEngine === 'openai' ? 'Using OpenAI TTS (click for browser)' : 'Using browser TTS (click for OpenAI)'}
+          >
+            {ttsEngine === 'openai' ? 'AI' : 'TTS'}
+          </button>
+
+          {/* OpenAI voice + key */}
+          {ttsEngine === 'openai' && (
+            <>
+              <select
+                value={openaiVoice}
+                onChange={(e) => { setOpenaiVoice(e.target.value); localStorage.setItem('appOpenaiVoice', e.target.value); }}
+                style={{ padding: '2px 6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #22c55e', backgroundColor: '#f0fdf4', color: '#166534' }}
+                title="Select OpenAI voice"
+              >
+                <option value="onyx">Onyx</option>
+                <option value="nova">Nova</option>
+                <option value="alloy">Alloy</option>
+                <option value="echo">Echo</option>
+                <option value="fable">Fable</option>
+                <option value="shimmer">Shimmer</option>
+              </select>
+              <button
+                onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  borderRadius: '4px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  backgroundColor: localStorage.getItem('OPENAI_API_KEY') ? '#dcfce7' : '#fee2e2',
+                  color: localStorage.getItem('OPENAI_API_KEY') ? '#166534' : '#991b1b'
+                }}
+                title={localStorage.getItem('OPENAI_API_KEY') ? 'API key set — click to change' : 'No API key — click to enter'}
+              >
+                Key
+              </button>
+              {showApiKeyInput && (
+                <input
+                  type="text"
+                  placeholder="sk-..."
+                  value={apiKeyValue}
+                  onFocus={() => { if (apiKeyValue.startsWith('••••')) setApiKeyValue(''); }}
+                  onChange={(e) => setApiKeyValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && apiKeyValue && !apiKeyValue.startsWith('••••')) {
+                      localStorage.setItem('OPENAI_API_KEY', apiKeyValue);
+                      setApiKeyValue('••••' + apiKeyValue.slice(-4));
+                      setShowApiKeyInput(false);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (apiKeyValue && !apiKeyValue.startsWith('••••')) {
+                      localStorage.setItem('OPENAI_API_KEY', apiKeyValue);
+                      setApiKeyValue('••••' + apiKeyValue.slice(-4));
+                    }
+                  }}
+                  style={{ padding: '2px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #22c55e', width: '150px' }}
+                  title="Paste OpenAI API key and press Enter"
+                />
+              )}
+            </>
+          )}
         </div>
+
+        {/* Cursive output area - inside sticky container */}
+        {interactionMode === 'cursive' && (
+          <div style={{
+            padding: '24px',
+            background: '#f5f0e8',
+            backgroundImage: 'repeating-linear-gradient(transparent, transparent 31px, #c9b99a 31px, #c9b99a 32px)',
+            borderRadius: '0 0 8px 8px',
+            border: '2px solid #c9b99a',
+            borderTop: 'none',
+            minHeight: '150px',
+            maxHeight: '300px',
+            overflowY: 'auto',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+          }}>
+            <div
+              ref={cursiveOutputRef}
+              style={{
+                fontFamily: "'Alex Brush', cursive",
+                fontSize: cursiveSize + 'px',
+                lineHeight: 1.25,
+                color: '#1a1209',
+                wordBreak: 'break-word'
+              }}
+            />
+          </div>
+        )}
+        </div>{/* end sticky container */}
 
         {/* Reading Area - Clickable Sentence Divs */}
         {sentences.length > 0 && (
           <div style={{ marginTop: '1.5rem' }}>
-            <h3 style={{ color: theme.heading }}>Click any sentence to read it aloud:</h3>
+            <h3 style={{ color: theme.heading }}>Click any sentence to {interactionMode === 'cursive' ? 'write it in cursive' : 'read it aloud'}:</h3>
             <div style={{
               backgroundColor: theme.cardBg,
               border: `2px solid ${theme.cardBorder}`,
@@ -774,7 +1017,14 @@ const TextToSpeechComponent = () => {
               {sentences.map((sentence, index) => (
                 <div
                   key={index}
-                  onClick={() => speakSentence(sentence, index)}
+                  onClick={() => {
+                    setCurrentSentenceIndex(index);
+                    if (interactionMode === 'cursive') {
+                      animateCursive(sentence);
+                    } else {
+                      speakSentence(sentence, index);
+                    }
+                  }}
                   style={{
                     padding: '0.75rem',
                     marginBottom: '0.5rem',
@@ -785,10 +1035,6 @@ const TextToSpeechComponent = () => {
                     fontWeight: currentSentenceIndex === index ? 'bold' : 'normal',
                     boxShadow: currentSentenceIndex === index ? `0 0 5px ${theme.highlight}80` : 'none',
                     color: currentSentenceIndex === index ? '#000' : theme.text
-                  }}
-                  onMouseEnter={() => {
-                    console.log(`[sentence hover] marking index=${index}`);
-                    setCurrentSentenceIndex(index);
                   }}
                 >
                   {sentence}.
