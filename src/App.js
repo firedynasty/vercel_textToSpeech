@@ -23,7 +23,7 @@ const TextToSpeechComponent = () => {
   const [darkMode, setDarkMode] = useState(false);
   const [fontSize, setFontSize] = useState(1.1);
   const darkModeToggleCooldownRef = useRef(false);
-  const [interactionMode, setInteractionMode] = useState('tts'); // 'tts' or 'cursive'
+  const [interactionMode, setInteractionMode] = useState('cursive'); // 'tts' or 'cursive'
   const [cursiveSpeed, setCursiveSpeed] = useState(() => parseInt(localStorage.getItem('tts-cursive-speed') ?? '3'));
   const [cursiveSize, setCursiveSize] = useState(() => parseInt(localStorage.getItem('tts-cursive-size') ?? '52'));
   const cursiveOutputRef = useRef(null);
@@ -114,15 +114,23 @@ const TextToSpeechComponent = () => {
     };
   }, []);
 
-  // Escape key pastes from clipboard
+  // Keyboard shortcuts: Escape pastes from clipboard, ArrowRight advances sentence
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
         handlePasteFromClipboard();
       }
+      if (e.key === 'ArrowRight') {
+        const nextIndex = currentSentenceIndexRef.current + 1;
+        if (nextIndex < sentencesRef.current.length) {
+          setCurrentSentenceIndex(nextIndex);
+          animateCursive(sentencesRef.current[nextIndex]);
+        }
+      }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load content from cloud or localStorage
