@@ -114,12 +114,11 @@ const TextToSpeechComponent = () => {
     };
   }, []);
 
-  // Escape key focuses textarea so user can Cmd+V paste
+  // Escape key pastes from clipboard
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && textareaRef.current) {
-        textareaRef.current.focus();
-        textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (e.key === 'Escape') {
+        handlePasteFromClipboard();
       }
     };
     document.addEventListener('keydown', handleKeyDown);
