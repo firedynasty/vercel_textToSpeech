@@ -23,11 +23,25 @@ const TextToSpeechComponent = () => {
   const [darkMode, setDarkMode] = useState(false);
   const [fontSize, setFontSize] = useState(1.1);
   const darkModeToggleCooldownRef = useRef(false);
-  const [interactionMode, setInteractionMode] = useState('cursive'); // 'tts' or 'cursive'
+  const [interactionMode, setInteractionMode] = useState('cursive'); // 'tts', 'cursive', or 'chinese'
+  const interactionModeRef = useRef('cursive');
   const [cursiveSpeed, setCursiveSpeed] = useState(() => parseInt(localStorage.getItem('tts-cursive-speed') ?? '3'));
   const [cursiveSize, setCursiveSize] = useState(() => parseInt(localStorage.getItem('tts-cursive-size') ?? '52'));
+  interactionModeRef.current = interactionMode;
   const cursiveOutputRef = useRef(null);
   const cursiveTimerRef = useRef(null);
+  // Chinese (Hanzi Writer) mode state
+  const [hanziChars, setHanziChars] = useState([]);
+  const [hanziActiveIdx, setHanziActiveIdx] = useState(0);
+  const [hanziSpeed, setHanziSpeed] = useState(() => parseFloat(localStorage.getItem('tts-hanzi-speed') || '1'));
+  const hanziTargetRef = useRef(null);
+  const hanziWriterRef = useRef(null);
+  const hanziCharsRef = useRef([]);
+  hanziCharsRef.current = hanziChars;
+  const hanziActiveIdxRef = useRef(0);
+  hanziActiveIdxRef.current = hanziActiveIdx;
+  const hanziSpeedRef = useRef(1);
+  hanziSpeedRef.current = hanziSpeed;
   const [ttsEngine, setTtsEngine] = useState(() => localStorage.getItem('appTtsEngine') || 'browser');
   const [openaiVoice, setOpenaiVoice] = useState(() => localStorage.getItem('appOpenaiVoice') || 'onyx');
   const [showApiKeyInput, setShowApiKeyInput] = useState(false);
@@ -51,6 +65,78 @@ const TextToSpeechComponent = () => {
       document.head.appendChild(link);
     }
   }, []);
+
+  // Load Hanzi Writer library
+  useEffect(() => {
+    if (!document.getElementById('hanzi-writer-script')) {
+      const script = document.createElement('script');
+      script.id = 'hanzi-writer-script';
+      script.src = 'https://cdn.jsdelivr.net/npm/hanzi-writer@3.7/dist/hanzi-writer.min.js';
+      document.head.appendChild(script);
+    }
+  }, []);
+
+  // Parse Chinese characters from text
+  const parseHanziChars = (text) => {
+    return [...(text || '')].filter(ch => {
+      const c = ch.codePointAt(0);
+      return (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF) || (c >= 0x20000 && c <= 0x2A6DF);
+    });
+  };
+
+  // Build a HanziWriter instance for a given character
+  const buildHanziWriter = (ch, autoAnimate) => {
+    if (typeof window.HanziWriter === 'undefined') {
+      setTimeout(() => buildHanziWriter(ch, autoAnimate), 150);
+      return;
+    }
+    const target = hanziTargetRef.current;
+    if (!target) return;
+    target.innerHTML = '';
+    try {
+      const writer = window.HanziWriter.create(target, ch, {
+        width: 280,
+        height: 280,
+        padding: 12,
+        showOutline: true,
+        showCharacter: false,
+        strokeAnimationSpeed: hanziSpeedRef.current,
+        delayBetweenStrokes: 220,
+        strokeColor: '#1a1209',
+        outlineColor: '#d8cfbb',
+        radicalColor: '#8b4513',
+        drawingColor: '#185FA5',
+        highlightColor: '#0F6E56',
+        onLoadCharDataSuccess: () => {
+          if (autoAnimate) {
+            writer.animateCharacter({
+              onComplete: () => {
+                // Auto-advance to next character
+                const nextIdx = hanziActiveIdxRef.current + 1;
+                if (nextIdx < hanziCharsRef.current.length) {
+                  setHanziActiveIdx(nextIdx);
+                  setTimeout(() => buildHanziWriter(hanziCharsRef.current[nextIdx], true), 400);
+                }
+              }
+            });
+          }
+        },
+      });
+      hanziWriterRef.current = writer;
+    } catch (e) {
+      console.error('HanziWriter error:', e);
+    }
+  };
+
+  // Start animating a sentence's Chinese characters one by one
+  const animateHanziSentence = (text) => {
+    const chars = parseHanziChars(text);
+    if (chars.length === 0) return;
+    setHanziChars(chars);
+    setHanziActiveIdx(0);
+    // Small delay to let React render the target div
+    setTimeout(() => buildHanziWriter(chars[0], true), 50);
+  };
 
   // Animate text in cursive style
   const animateCursive = (text) => {
@@ -124,7 +210,12 @@ const TextToSpeechComponent = () => {
         const nextIndex = currentSentenceIndexRef.current + 1;
         if (nextIndex < sentencesRef.current.length) {
           setCurrentSentenceIndex(nextIndex);
-          animateCursive(sentencesRef.current[nextIndex]);
+          const sentence = sentencesRef.current[nextIndex];
+          if (interactionModeRef.current === 'chinese') {
+            animateHanziSentence(sentence);
+          } else {
+            animateCursive(sentence);
+          }
         }
       }
     };
@@ -787,7 +878,7 @@ const TextToSpeechComponent = () => {
         {/* Sticky container for navbar + cursive output */}
         <div style={{ position: 'sticky', top: 0, zIndex: 100, marginTop: '0.75rem' }}>
         {/* Auto-advance toggle - navbar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', backgroundColor: theme.navbarBg, borderRadius: interactionMode === 'cursive' ? '8px 8px 0 0' : '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', backgroundColor: theme.navbarBg, borderRadius: (interactionMode === 'cursive' || interactionMode === 'chinese') ? '8px 8px 0 0' : '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
           <span
             onClick={() => { console.log('[navbar] Stop After Line clicked → autoAdvance=false'); setAutoAdvance(false); }}
             style={{ fontWeight: 'bold', fontSize: '12px', color: '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: !autoAdvance ? '#ffcdd2' : 'transparent' }}
@@ -829,6 +920,10 @@ const TextToSpeechComponent = () => {
             <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '12px', fontWeight: interactionMode === 'cursive' ? 'bold' : 'normal', color: interactionMode === 'cursive' ? '#8b4513' : '#666' }}>
               <input type="radio" name="mode" value="cursive" checked={interactionMode === 'cursive'} onChange={() => setInteractionMode('cursive')} style={{ margin: 0 }} />
               Cursive
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '12px', fontWeight: interactionMode === 'chinese' ? 'bold' : 'normal', color: interactionMode === 'chinese' ? '#c41e3a' : '#666' }}>
+              <input type="radio" name="mode" value="chinese" checked={interactionMode === 'chinese'} onChange={() => setInteractionMode('chinese')} style={{ margin: 0 }} />
+              Chinese
             </label>
             {interactionMode === 'cursive' && (
               <>
@@ -1002,12 +1097,86 @@ const TextToSpeechComponent = () => {
             />
           </div>
         )}
+
+        {/* Chinese (Hanzi Writer) output area - inside sticky container */}
+        {interactionMode === 'chinese' && (
+          <div style={{
+            padding: '16px 24px',
+            background: '#faf8f3',
+            borderRadius: '0 0 8px 8px',
+            border: '2px solid #c9b99a',
+            borderTop: 'none',
+            minHeight: '150px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+          }}>
+            {/* Tile rail */}
+            {hanziChars.length > 0 && (
+              <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', padding: '8px', background: '#f1ede4', borderRadius: '8px', marginBottom: '12px', alignItems: 'center' }}>
+                {hanziChars.map((ch, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setHanziActiveIdx(i);
+                      buildHanziWriter(ch, true);
+                    }}
+                    style={{
+                      fontSize: '24px', lineHeight: 1, padding: '8px 12px',
+                      background: i === hanziActiveIdx ? '#8b4513' : '#fff',
+                      color: i === hanziActiveIdx ? '#fff' : '#1a1209',
+                      border: i === hanziActiveIdx ? '2px solid #8b4513' : '1px solid #d8cfbb',
+                      borderRadius: '8px', cursor: 'pointer', flexShrink: 0,
+                      transform: i === hanziActiveIdx ? 'translateY(-1px)' : 'none',
+                      transition: 'all 0.12s'
+                    }}
+                  >{ch}</button>
+                ))}
+                <span style={{ fontSize: '13px', color: '#6b6457', marginLeft: '8px', whiteSpace: 'nowrap' }}>
+                  {hanziActiveIdx + 1} / {hanziChars.length}
+                </span>
+              </div>
+            )}
+            {/* Writer canvas */}
+            <div style={{ display: 'flex', justifyContent: 'center', background: '#f1ede4', borderRadius: '12px', padding: '16px', marginBottom: '10px' }}>
+              <div
+                ref={hanziTargetRef}
+                style={{
+                  width: '280px', height: '280px',
+                  background: '#fff', borderRadius: '8px',
+                  backgroundImage: 'linear-gradient(to right, #d8cfbb 0.5px, transparent 0.5px), linear-gradient(to bottom, #d8cfbb 0.5px, transparent 0.5px)',
+                  backgroundSize: '140px 140px',
+                  backgroundPosition: 'center center'
+                }}
+              />
+            </div>
+            {/* Speed slider */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '13px', color: '#6b6457' }}>
+              <span>Speed</span>
+              <input type="range" min="0.3" max="3" step="0.1" value={hanziSpeed}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  setHanziSpeed(v);
+                  localStorage.setItem('tts-hanzi-speed', String(v));
+                  if (hanziWriterRef.current && hanziWriterRef.current._options) {
+                    hanziWriterRef.current._options.strokeAnimationSpeed = v;
+                  }
+                }}
+                style={{ flex: 1, accentColor: '#8b4513' }}
+              />
+              <span style={{ fontWeight: 500, minWidth: '40px', textAlign: 'right' }}>{hanziSpeed.toFixed(1)}×</span>
+            </div>
+            {hanziChars.length === 0 && (
+              <div style={{ textAlign: 'center', color: '#6b6457', fontSize: '14px', padding: '40px 0' }}>
+                Click a sentence below to animate its Chinese characters
+              </div>
+            )}
+          </div>
+        )}
         </div>{/* end sticky container */}
 
         {/* Reading Area - Clickable Sentence Divs */}
         {sentences.length > 0 && (
           <div style={{ marginTop: '1.5rem' }}>
-            <h3 style={{ color: theme.heading }}>Click any sentence to {interactionMode === 'cursive' ? 'write it in cursive' : 'read it aloud'}:</h3>
+            <h3 style={{ color: theme.heading }}>Click any sentence to {interactionMode === 'cursive' ? 'write it in cursive' : interactionMode === 'chinese' ? 'animate its characters' : 'read it aloud'}:</h3>
             <div style={{
               backgroundColor: theme.cardBg,
               border: `2px solid ${theme.cardBorder}`,
@@ -1024,6 +1193,8 @@ const TextToSpeechComponent = () => {
                     setCurrentSentenceIndex(index);
                     if (interactionMode === 'cursive') {
                       animateCursive(sentence);
+                    } else if (interactionMode === 'chinese') {
+                      animateHanziSentence(sentence);
                     } else {
                       speakSentence(sentence, index);
                     }
