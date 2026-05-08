@@ -31,7 +31,7 @@ const TextToSpeechComponent = () => {
   const cursiveOutputRef = useRef(null);
   const cursiveTimerRef = useRef(null);
   const hyphRef = useRef(null);
-  const [showSyllables, setShowSyllables] = useState(false);
+  const [showSyllables, setShowSyllables] = useState(() => localStorage.getItem('tts-show-syllables') === 'true');
 
   const syllabifyText = (text) => {
     if (!hyphRef.current) return text;
@@ -1031,7 +1031,7 @@ const TextToSpeechComponent = () => {
           </span>
 
           <button
-            onClick={() => setShowSyllables(s => !s)}
+            onClick={() => setShowSyllables(s => { const next = !s; localStorage.setItem('tts-show-syllables', next); return next; })}
             style={{
               marginLeft: 'auto',
               padding: '4px 12px',
