@@ -30,6 +30,20 @@ const TextToSpeechComponent = () => {
   interactionModeRef.current = interactionMode;
   const cursiveOutputRef = useRef(null);
   const cursiveTimerRef = useRef(null);
+  const hyphRef = useRef(null);
+  const [showSyllables, setShowSyllables] = useState(false);
+
+  const syllabifyText = (text) => {
+    if (!hyphRef.current) return text;
+    return text.split(/\s+/).filter(Boolean).map(w => {
+      const m = w.match(/^(\W*)(.*?)(\W*)$/);
+      if (!m) return w;
+      const [, lead, core, trail] = m;
+      if (!core) return w;
+      return lead + hyphRef.current.hyphenate(core).join('\u00B7') + trail;
+    }).join(' ');
+  };
+
   // Chinese (Hanzi Writer) mode state
   const [hanziChars, setHanziChars] = useState([]);
   const [hanziActiveIdx, setHanziActiveIdx] = useState(0);
@@ -55,6 +69,31 @@ const TextToSpeechComponent = () => {
   openaiVoiceRef.current = openaiVoice;
   const currentAudioRef = useRef(null);
 
+  // Speak whatever is currently in the cursive output area
+  const speakCursiveOutput = () => {
+    if (!cursiveOutputRef.current) return;
+    // Get plain text from the cursive output, stripping syllable dots
+    const text = cursiveOutputRef.current.textContent.replace(/\u00B7/g, '').trim();
+    if (!text) return;
+
+    // Stop any current speech
+    speechSynthesis.cancel();
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+
+    const apiKey = (localStorage.getItem('OPENAI_API_KEY') || '').trim();
+    if (apiKey) {
+      speakWithOpenAI(text);
+    } else {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = selectedLanguage;
+      utterance.rate = speechRate;
+      speechSynthesis.speak(utterance);
+    }
+  };
+
   // Load cursive font
   useEffect(() => {
     if (!document.getElementById('cursive-font-link')) {
@@ -63,6 +102,20 @@ const TextToSpeechComponent = () => {
       link.rel = 'stylesheet';
       link.href = 'https://fonts.googleapis.com/css2?family=Alex+Brush&display=swap';
       document.head.appendChild(link);
+    }
+  }, []);
+
+  // Load Hypher for syllable hyphenation
+  useEffect(() => {
+    if (!hyphRef.current) {
+      Promise.all([
+        import(/* webpackIgnore: true */ 'https://esm.sh/hypher'),
+        import(/* webpackIgnore: true */ 'https://esm.sh/hyphenation.en-us')
+      ]).then(([HypherMod, enMod]) => {
+        const Hypher = HypherMod.default || HypherMod;
+        const english = enMod.default || enMod;
+        hyphRef.current = new Hypher(english);
+      }).catch(err => console.warn('Failed to load Hypher:', err));
     }
   }, []);
 
@@ -151,11 +204,21 @@ const TextToSpeechComponent = () => {
     const fadeMs = [700, 500, 350, 220, 120][cursiveSpeed - 1];
     const delayMs = [600, 420, 280, 170, 90][cursiveSpeed - 1];
 
+    const syllabifyWord = (w) => {
+      if (!hyphRef.current) return w;
+      const m = w.match(/^(\W*)(.*?)(\W*)$/);
+      if (!m) return w;
+      const [, lead, core, trail] = m;
+      if (!core) return w;
+      return lead + hyphRef.current.hyphenate(core).join('\u00B7') + trail;
+    };
+
     const words = text.split(/\s+/).filter(Boolean);
     const spans = words.map((word, i) => {
       const sp = document.createElement('span');
       sp.style.cssText = `display:inline;opacity:0;transition:opacity ${fadeMs}ms ease`;
-      sp.textContent = i < words.length - 1 ? word + ' ' : word;
+      const display = syllabifyWord(word);
+      sp.textContent = i < words.length - 1 ? display + ' ' : display;
       outputEl.appendChild(sp);
       return sp;
     });
@@ -211,6 +274,18 @@ const TextToSpeechComponent = () => {
         if (nextIndex < sentencesRef.current.length) {
           setCurrentSentenceIndex(nextIndex);
           const sentence = sentencesRef.current[nextIndex];
+          if (interactionModeRef.current === 'chinese') {
+            animateHanziSentence(sentence);
+          } else {
+            animateCursive(sentence);
+          }
+        }
+      }
+      if (e.key === 'ArrowLeft') {
+        const prevIndex = currentSentenceIndexRef.current - 1;
+        if (prevIndex >= 0) {
+          setCurrentSentenceIndex(prevIndex);
+          const sentence = sentencesRef.current[prevIndex];
           if (interactionModeRef.current === 'chinese') {
             animateHanziSentence(sentence);
           } else {
@@ -956,9 +1031,43 @@ const TextToSpeechComponent = () => {
           </span>
 
           <button
-            onClick={handlePasteFromClipboard}
+            onClick={() => setShowSyllables(s => !s)}
             style={{
               marginLeft: 'auto',
+              padding: '4px 12px',
+              color: 'white',
+              backgroundColor: showSyllables ? '#6366f1' : '#6b7280',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '600'
+            }}
+            title={showSyllables ? 'Syllables ON (click to hide)' : 'Show syllable breaks'}
+          >
+            {showSyllables ? 'Syl: ON' : 'Syl'}
+          </button>
+
+          <button
+            onClick={speakCursiveOutput}
+            style={{
+              padding: '4px 12px',
+              color: 'white',
+              backgroundColor: '#10B981',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '600'
+            }}
+            title={localStorage.getItem('OPENAI_API_KEY') ? 'Speak cursive text (OpenAI)' : 'Speak cursive text (browser)'}
+          >
+            Speak
+          </button>
+
+          <button
+            onClick={handlePasteFromClipboard}
+            style={{
               padding: '4px 12px',
               color: 'white',
               backgroundColor: '#10B981',
@@ -1211,7 +1320,7 @@ const TextToSpeechComponent = () => {
                     color: currentSentenceIndex === index ? '#000' : theme.text
                   }}
                 >
-                  {sentence}.
+                  {showSyllables ? syllabifyText(sentence) : sentence}.
                 </div>
               ))}
             </div>
