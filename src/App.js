@@ -1024,7 +1024,8 @@ const TextToSpeechComponent = () => {
                   disabled={currentSentenceIndex >= sentences.length - 1}
                   title="Next sentence"
                   style={{ padding: '0 8px', border: '1px solid #c9b99a', borderRadius: 2, background: '#8b4513', color: '#f5f0e8', fontSize: 12, lineHeight: 1, cursor: 'pointer' }}
-                >▼</button>
+                ><span style={{ fontSize: 10, marginRight: 4 }}>Nxt sent:</span>▼</button>
+                <span style={{ fontSize: 10, color: '#666', marginLeft: 4 }}>(&larr;, &rarr; keys work)</span>
               </>
             )}
           </span>
