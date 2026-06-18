@@ -227,8 +227,7 @@ const TextToSpeechComponent = () => {
     function next() {
       if (i >= spans.length) { cursiveTimerRef.current = null; return; }
       spans[i].style.opacity = '1';
-      const nearBottom = outputEl.scrollHeight - outputEl.scrollTop - outputEl.clientHeight < 80;
-      if (nearBottom) outputEl.scrollTop = outputEl.scrollHeight;
+      outputEl.scrollTo({ top: outputEl.scrollHeight, behavior: 'smooth' });
       i++;
       cursiveTimerRef.current = setTimeout(next, delayMs);
     }
