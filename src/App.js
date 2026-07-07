@@ -34,6 +34,14 @@ const TextToSpeechComponent = () => {
   const cursiveTimerRef = useRef(null);
   const hyphRef = useRef(null);
   const [showSyllables, setShowSyllables] = useState(() => localStorage.getItem('tts-show-syllables') === 'true');
+  const sentenceRefs = useRef([]);
+
+  // Auto-scroll to keep the active sentence visible
+  useEffect(() => {
+    if (currentSentenceIndex >= 0 && sentenceRefs.current[currentSentenceIndex]) {
+      sentenceRefs.current[currentSentenceIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [currentSentenceIndex]);
 
   const syllabifyText = (text) => {
     if (!hyphRef.current) return text;
@@ -1216,6 +1224,7 @@ const TextToSpeechComponent = () => {
               {sentences.map((sentence, index) => (
                 <div
                   key={index}
+                  ref={el => sentenceRefs.current[index] = el}
                   onClick={() => {
                     setCurrentSentenceIndex(index);
                     if (interactionMode === 'cursive') {
