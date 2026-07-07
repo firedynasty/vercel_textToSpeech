@@ -1112,25 +1112,29 @@ const TextToSpeechComponent = () => {
         {/* Cursive output area - inside sticky container */}
         {interactionMode === 'cursive' && (
           <div style={{
-            padding: isMobile ? '16px' : '24px',
+            padding: isMobile ? '12px 16px' : '24px',
             background: '#f5f0e8',
             backgroundImage: 'repeating-linear-gradient(transparent, transparent 31px, #c9b99a 31px, #c9b99a 32px)',
             borderRadius: '0 0 8px 8px',
             border: '2px solid #c9b99a',
             borderTop: 'none',
-            minHeight: isMobile ? '100px' : '150px',
-            maxHeight: '300px',
-            overflowY: 'auto',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+            ...(isMobile
+              ? { height: '70px', overflow: 'hidden' }
+              : { minHeight: '150px', maxHeight: '300px', overflowY: 'auto' }),
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            display: 'flex',
+            alignItems: 'center'
           }}>
             <div
               ref={cursiveOutputRef}
               style={{
                 fontFamily: "'Alex Brush', cursive",
-                fontSize: (isMobile ? Math.min(cursiveSize, 44) : cursiveSize) + 'px',
+                fontSize: (isMobile ? Math.min(cursiveSize, 36) : cursiveSize) + 'px',
                 lineHeight: 1.25,
                 color: '#1a1209',
-                wordBreak: 'break-word'
+                wordBreak: 'break-word',
+                width: '100%',
+                ...(isMobile ? { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } : {})
               }}
             />
           </div>
