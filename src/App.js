@@ -857,12 +857,16 @@ const TextToSpeechComponent = () => {
           <button onClick={handleAppendFromClipboard} style={{ ...mobileBtn, backgroundColor: '#F59E0B' }}>
             Append
           </button>
-          <button onClick={loadFromBlob} disabled={isLoading} style={{ ...mobileBtn, background: 'rgba(76, 175, 80, 0.3)', cursor: isLoading ? 'not-allowed' : 'pointer' }}>
-            {isLoading ? '...' : 'Load'}
-          </button>
-          <button onClick={saveToBlob} disabled={isSaving} style={{ ...mobileBtn, background: 'rgba(76, 175, 80, 0.3)', cursor: isSaving ? 'not-allowed' : 'pointer' }}>
-            {isSaving ? '...' : 'Save'}
-          </button>
+          {!isMobile && (
+            <>
+              <button onClick={loadFromBlob} disabled={isLoading} style={{ ...mobileBtn, background: 'rgba(76, 175, 80, 0.3)', cursor: isLoading ? 'not-allowed' : 'pointer' }}>
+                {isLoading ? '...' : 'Load'}
+              </button>
+              <button onClick={saveToBlob} disabled={isSaving} style={{ ...mobileBtn, background: 'rgba(76, 175, 80, 0.3)', cursor: isSaving ? 'not-allowed' : 'pointer' }}>
+                {isSaving ? '...' : 'Save'}
+              </button>
+            </>
+          )}
           <button onClick={() => setFontSize(prev => Math.max(0.5, prev - 0.1))} style={{ ...mobileBtn, background: '#6366f1', padding: '8px 14px' }}>-</button>
           <button onClick={() => setFontSize(prev => Math.min(3, prev + 0.1))} style={{ ...mobileBtn, background: '#6366f1', padding: '8px 14px' }}>+</button>
           {!isMobile && (
@@ -921,15 +925,17 @@ const TextToSpeechComponent = () => {
               disabled={currentSentenceIndex >= sentences.length - 1}
               style={{ ...mobileBtn, background: '#8b4513', fontSize: isMobile ? '13px' : '12px', padding: isMobile ? '6px 12px' : '4px 8px' }}
             >
-              Next ▼
+              Read Next
             </button>
 
-            {/* Speak button */}
-            <button onClick={speakCursiveOutput} style={{ ...mobileBtn, backgroundColor: '#10B981', fontSize: isMobile ? '13px' : '12px', padding: isMobile ? '6px 12px' : '4px 8px' }}
-              title={localStorage.getItem('OPENAI_API_KEY') ? 'Speak (OpenAI)' : 'Speak (browser)'}
-            >
-              Speak
-            </button>
+            {/* Speak button - desktop only */}
+            {!isMobile && (
+              <button onClick={speakCursiveOutput} style={{ ...mobileBtn, backgroundColor: '#10B981', fontSize: '12px', padding: '4px 8px' }}
+                title={localStorage.getItem('OPENAI_API_KEY') ? 'Speak (OpenAI)' : 'Speak (browser)'}
+              >
+                Speak
+              </button>
+            )}
 
             {/* More toggle on mobile, inline controls on desktop */}
             {isMobile ? (
