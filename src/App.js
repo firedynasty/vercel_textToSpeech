@@ -1208,49 +1208,79 @@ const TextToSpeechComponent = () => {
         )}
         </div>{/* end sticky container */}
 
-        {/* Reading Area - Clickable Sentence Divs */}
+        {/* Reading Area */}
         {sentences.length > 0 && (
           <div style={{ marginTop: isMobile ? '0.75rem' : '1.5rem' }}>
-            {!isMobile && <h3 style={{ color: theme.heading }}>Click any sentence to {interactionMode === 'cursive' ? 'write it in cursive' : interactionMode === 'chinese' ? 'animate its characters' : 'read it aloud'}:</h3>}
-            <div style={{
-              backgroundColor: theme.cardBg,
-              border: `2px solid ${theme.cardBorder}`,
-              borderRadius: '0.5rem',
-              padding: isMobile ? '0.75rem' : '1.5rem',
-              minHeight: isMobile ? '100px' : '200px',
-              fontSize: `${fontSize}rem`,
-              lineHeight: '1.8'
-            }}>
-              {sentences.map((sentence, index) => (
-                <div
-                  key={index}
-                  ref={el => sentenceRefs.current[index] = el}
-                  onClick={() => {
-                    setCurrentSentenceIndex(index);
-                    if (interactionMode === 'cursive') {
-                      animateCursive(sentence);
-                    } else if (interactionMode === 'chinese') {
-                      animateHanziSentence(sentence);
-                    } else {
-                      speakSentence(sentence, index);
-                    }
-                  }}
-                  style={{
-                    padding: isMobile ? '0.5rem' : '0.75rem',
-                    marginBottom: '0.5rem',
-                    cursor: 'pointer',
-                    borderRadius: '0.25rem',
-                    backgroundColor: currentSentenceIndex === index ? theme.highlight : 'transparent',
-                    transition: 'background-color 0.2s',
-                    fontWeight: currentSentenceIndex === index ? 'bold' : 'normal',
-                    boxShadow: currentSentenceIndex === index ? `0 0 5px ${theme.highlight}80` : 'none',
-                    color: currentSentenceIndex === index ? '#000' : theme.text
-                  }}
-                >
-                  {showSyllables ? syllabifyText(sentence) : sentence}.
+            {interactionMode === 'tts' ? (
+              /* TTS mode: full clickable list */
+              <>
+                {!isMobile && <h3 style={{ color: theme.heading }}>Click any sentence to read it aloud:</h3>}
+                <div style={{
+                  backgroundColor: theme.cardBg,
+                  border: `2px solid ${theme.cardBorder}`,
+                  borderRadius: '0.5rem',
+                  padding: isMobile ? '0.75rem' : '1.5rem',
+                  minHeight: isMobile ? '100px' : '200px',
+                  fontSize: `${fontSize}rem`,
+                  lineHeight: '1.8'
+                }}>
+                  {sentences.map((sentence, index) => (
+                    <div
+                      key={index}
+                      ref={el => sentenceRefs.current[index] = el}
+                      onClick={() => {
+                        setCurrentSentenceIndex(index);
+                        speakSentence(sentence, index);
+                      }}
+                      style={{
+                        padding: isMobile ? '0.5rem' : '0.75rem',
+                        marginBottom: '0.5rem',
+                        cursor: 'pointer',
+                        borderRadius: '0.25rem',
+                        backgroundColor: currentSentenceIndex === index ? theme.highlight : 'transparent',
+                        transition: 'background-color 0.2s',
+                        fontWeight: currentSentenceIndex === index ? 'bold' : 'normal',
+                        boxShadow: currentSentenceIndex === index ? `0 0 5px ${theme.highlight}80` : 'none',
+                        color: currentSentenceIndex === index ? '#000' : theme.text
+                      }}
+                    >
+                      {showSyllables ? syllabifyText(sentence) : sentence}.
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </>
+            ) : (
+              /* Cursive / Chinese mode: teleprompter - only current sentence, previous erased */
+              <div style={{
+                backgroundColor: theme.cardBg,
+                border: `2px solid ${theme.cardBorder}`,
+                borderRadius: '0.5rem',
+                padding: isMobile ? '1rem' : '1.5rem',
+                minHeight: isMobile ? '80px' : '120px',
+                fontSize: `${fontSize}rem`,
+                lineHeight: '1.8',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                textAlign: 'center'
+              }}>
+                {currentSentenceIndex >= 0 ? (
+                  <>
+                    <div style={{ fontWeight: 'bold', color: theme.text, marginBottom: '0.5rem' }}>
+                      {showSyllables ? syllabifyText(sentences[currentSentenceIndex]) : sentences[currentSentenceIndex]}.
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: theme.textSecondary }}>
+                      {currentSentenceIndex + 1} / {sentences.length}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ color: theme.textSecondary, fontSize: '0.9rem' }}>
+                    Tap <strong>Next</strong> or use arrow keys to start reading
+                  </div>
+                )}
+              </div>
+            )}
             <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: theme.textSecondary }}>
               {sentences.length} sentences detected
             </p>
