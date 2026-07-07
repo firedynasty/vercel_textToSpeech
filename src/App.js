@@ -27,6 +27,8 @@ const TextToSpeechComponent = () => {
   const interactionModeRef = useRef('cursive');
   const [cursiveSpeed, setCursiveSpeed] = useState(() => parseInt(localStorage.getItem('tts-cursive-speed') ?? '3'));
   const [cursiveSize, setCursiveSize] = useState(() => parseInt(localStorage.getItem('tts-cursive-size') ?? '52'));
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   interactionModeRef.current = interactionMode;
   const cursiveOutputRef = useRef(null);
   const cursiveTimerRef = useRef(null);
@@ -93,6 +95,13 @@ const TextToSpeechComponent = () => {
       speechSynthesis.speak(utterance);
     }
   };
+
+  // Track mobile viewport
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // Load cursive font
   useEffect(() => {
@@ -797,31 +806,33 @@ const TextToSpeechComponent = () => {
 
   console.log(`[render] currentSentenceIndex=${currentSentenceIndex}, sentences.length=${sentences.length}`);
 
+  const mobileBtn = { padding: '8px 12px', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: '600', minHeight: '36px' };
+
   return (
-    <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', height: '100vh', backgroundColor: theme.bg, color: theme.text }}>
+    <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: theme.bg, color: theme.text }}>
       {/* Main content */}
-      <div style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
-        <h1>React TTS Component - Multi-Language Test</h1>
+      <div style={{ flex: 1, padding: isMobile ? '0.5rem' : '1rem', overflowY: 'auto' }}>
+        {!isMobile && <h1>React TTS Component - Multi-Language Test</h1>}
 
         {/* Text Input Section */}
-      <div style={{ marginBottom: '2rem', padding: '1rem', border: `2px solid ${theme.sectionBorder}`, borderRadius: '0.5rem', backgroundColor: theme.sectionBg }}>
-        <h2 style={{ marginTop: 0, color: theme.heading }}>Text-to-Speech Reader</h2>
+      <div style={{ marginBottom: isMobile ? '0.5rem' : '2rem', padding: isMobile ? '0.5rem' : '1rem', border: `2px solid ${theme.sectionBorder}`, borderRadius: '0.5rem', backgroundColor: theme.sectionBg }}>
+        {!isMobile && <h2 style={{ marginTop: 0, color: theme.heading }}>Text-to-Speech Reader</h2>}
 
-        <div style={{ marginBottom: '1rem' }}>
+        <div style={{ marginBottom: isMobile ? '0.5rem' : '1rem' }}>
           <textarea
             ref={textareaRef}
-            placeholder="Paste your text here or click 'Paste from Clipboard' to automatically get clipboard content..."
+            placeholder="Paste text here..."
             value={textareaContent}
             onChange={handleTextareaChange}
             onPaste={handleTextareaPaste}
             style={{
               width: '100%',
-              minHeight: '120px',
+              minHeight: isMobile ? '60px' : '120px',
               padding: '0.75rem',
               border: `1px solid ${theme.inputBorder}`,
               borderRadius: '0.25rem',
               fontFamily: 'inherit',
-              fontSize: '1rem',
+              fontSize: isMobile ? '16px' : '1rem',
               resize: 'vertical',
               boxSizing: 'border-box',
               backgroundColor: theme.inputBg,
@@ -830,366 +841,276 @@ const TextToSpeechComponent = () => {
           />
         </div>
 
+        {/* Action buttons - compact on mobile */}
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button
-            onClick={handlePasteFromClipboard}
-            style={{
-              padding: '0.5rem 1rem',
-              color: 'white',
-              backgroundColor: '#10B981',
-              border: 'none',
-              borderRadius: '0.25rem',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              fontWeight: '600'
-            }}
-          >
-            Paste from Clipboard
+          <button onClick={handlePasteFromClipboard} style={{ ...mobileBtn, backgroundColor: '#10B981' }}>
+            Paste
           </button>
-
-          <button
-            onClick={handleAppendFromClipboard}
-            style={{
-              padding: '0.5rem 1rem',
-              color: 'white',
-              backgroundColor: '#F59E0B',
-              border: 'none',
-              borderRadius: '0.25rem',
-              cursor: 'pointer',
-              fontSize: '1rem',
-              fontWeight: '600'
-            }}
-          >
+          <button onClick={handleAppendFromClipboard} style={{ ...mobileBtn, backgroundColor: '#F59E0B' }}>
             Append
           </button>
-
-          <button
-            onClick={loadFromBlob}
-            disabled={isLoading}
-            style={{
-              padding: '8px 16px',
-              background: 'rgba(76, 175, 80, 0.3)',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: isLoading ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-              color: 'white',
-              fontSize: '1rem'
-            }}
-          >
-            {isLoading ? 'Loading...' : 'Load'}
+          <button onClick={loadFromBlob} disabled={isLoading} style={{ ...mobileBtn, background: 'rgba(76, 175, 80, 0.3)', cursor: isLoading ? 'not-allowed' : 'pointer' }}>
+            {isLoading ? '...' : 'Load'}
           </button>
-
-          <button
-            onClick={saveToBlob}
-            disabled={isSaving}
-            style={{
-              padding: '8px 16px',
-              background: 'rgba(76, 175, 80, 0.3)',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: isSaving ? 'not-allowed' : 'pointer',
-              fontWeight: 'bold',
-              color: 'white',
-              fontSize: '1rem'
-            }}
-          >
-            {isSaving ? 'Saving...' : 'Save'}
+          <button onClick={saveToBlob} disabled={isSaving} style={{ ...mobileBtn, background: 'rgba(76, 175, 80, 0.3)', cursor: isSaving ? 'not-allowed' : 'pointer' }}>
+            {isSaving ? '...' : 'Save'}
           </button>
-
-          <button
-            onClick={() => setFontSize(prev => Math.max(0.5, prev - 0.1))}
-            style={{
-              padding: '8px 14px',
-              background: '#6366f1',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold',
-              color: 'white',
-              fontSize: '1.1rem'
-            }}
-          >
-            -
-          </button>
-
-          <button
-            onClick={() => setFontSize(prev => Math.min(3, prev + 0.1))}
-            style={{
-              padding: '8px 14px',
-              background: '#6366f1',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold',
-              color: 'white',
-              fontSize: '1.1rem'
-            }}
-          >
-            +
-          </button>
-
-          <a
-            href="/youtubetranscriptreader.html"
-            style={{
-              padding: '8px 14px',
-              background: '#6366f1',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontWeight: 'bold',
-              color: 'white',
-              fontSize: '1.1rem',
-              textDecoration: 'none',
-              display: 'inline-block'
-            }}
-            title="YouTube Transcript Reader"
-          >
-            📖▶
-          </a>
+          <button onClick={() => setFontSize(prev => Math.max(0.5, prev - 0.1))} style={{ ...mobileBtn, background: '#6366f1', padding: '8px 14px' }}>-</button>
+          <button onClick={() => setFontSize(prev => Math.min(3, prev + 0.1))} style={{ ...mobileBtn, background: '#6366f1', padding: '8px 14px' }}>+</button>
+          {!isMobile && (
+            <a href="/youtubetranscriptreader.html" style={{ ...mobileBtn, background: '#6366f1', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }} title="YouTube Transcript Reader">
+              📖▶
+            </a>
+          )}
         </div>
 
         {/* Sticky container for navbar + cursive output */}
         <div style={{ position: 'sticky', top: 0, zIndex: 100, marginTop: '0.75rem' }}>
-        {/* Auto-advance toggle - navbar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', backgroundColor: theme.navbarBg, borderRadius: (interactionMode === 'cursive' || interactionMode === 'chinese') ? '8px 8px 0 0' : '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-          <span
-            onClick={() => { console.log('[navbar] Stop After Line clicked → autoAdvance=false'); setAutoAdvance(false); }}
-            style={{ fontWeight: 'bold', fontSize: '12px', color: '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: !autoAdvance ? '#ffcdd2' : 'transparent' }}
-          >Stop After Line</span>
-          <label style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px', cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={autoAdvance}
-              onChange={(e) => setAutoAdvance(e.target.checked)}
-              style={{ opacity: 0, width: 0, height: 0 }}
-            />
-            <span style={{
-              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-              backgroundColor: autoAdvance ? '#4CAF50' : '#ddd',
-              transition: '.4s', borderRadius: '24px'
-            }}>
-              <span style={{
-                position: 'absolute', content: '""',
-                height: '18px', width: '18px',
-                left: autoAdvance ? '29px' : '3px',
-                bottom: '3px',
-                backgroundColor: 'white',
-                transition: '.4s', borderRadius: '50%',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.3)'
-              }} />
-            </span>
-          </label>
-          <span
-            onClick={() => setAutoAdvance(true)}
-            style={{ fontWeight: 'bold', fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: autoAdvance ? '#c8e6c9' : 'transparent' }}
-          >Auto Next Line</span>
 
-          {/* TTS / Cursive mode toggle */}
-          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '8px', borderLeft: '1px solid #ccc', paddingLeft: '10px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '12px', fontWeight: interactionMode === 'tts' ? 'bold' : 'normal', color: interactionMode === 'tts' ? '#2563eb' : '#666' }}>
-              <input type="radio" name="mode" value="tts" checked={interactionMode === 'tts'} onChange={() => setInteractionMode('tts')} style={{ margin: 0 }} />
-              TTS
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '12px', fontWeight: interactionMode === 'cursive' ? 'bold' : 'normal', color: interactionMode === 'cursive' ? '#8b4513' : '#666' }}>
-              <input type="radio" name="mode" value="cursive" checked={interactionMode === 'cursive'} onChange={() => setInteractionMode('cursive')} style={{ margin: 0 }} />
-              Cursive
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '3px', cursor: 'pointer', fontSize: '12px', fontWeight: interactionMode === 'chinese' ? 'bold' : 'normal', color: interactionMode === 'chinese' ? '#c41e3a' : '#666' }}>
-              <input type="radio" name="mode" value="chinese" checked={interactionMode === 'chinese'} onChange={() => setInteractionMode('chinese')} style={{ margin: 0 }} />
-              Chinese
-            </label>
-            {interactionMode === 'cursive' && (
-              <>
-                <label style={{ fontSize: '10px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                  Spd
-                  <input type="range" min="1" max="5" value={cursiveSpeed}
-                    onChange={(e) => { const v = parseInt(e.target.value); setCursiveSpeed(v); localStorage.setItem('tts-cursive-speed', v); }}
-                    style={{ width: '50px', accentColor: '#8b4513' }} />
-                </label>
-                <label style={{ fontSize: '10px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                  Size
-                  <input type="range" min="28" max="80" value={cursiveSize}
-                    onChange={(e) => { const v = parseInt(e.target.value); setCursiveSize(v); localStorage.setItem('tts-cursive-size', v); }}
-                    style={{ width: '50px', accentColor: '#8b4513' }} />
-                </label>
+        {/* Navbar - Row 1: Mode selector + essential controls */}
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: isMobile ? '6px' : '0',
+          padding: isMobile ? '8px' : '8px 12px',
+          backgroundColor: theme.navbarBg,
+          borderRadius: (interactionMode === 'cursive' || interactionMode === 'chinese') ? '8px 8px 0 0' : '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+        }}>
+          {/* Row 1: Mode + Next + Speak */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            {/* Mode selector as segmented control */}
+            <div style={{ display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid #ccc' }}>
+              {['tts', 'cursive', 'chinese'].map(mode => (
                 <button
-                  onClick={() => {
-                    const nextIndex = currentSentenceIndex + 1;
-                    if (nextIndex < sentences.length) {
-                      setCurrentSentenceIndex(nextIndex);
-                      animateCursive(sentences[nextIndex]);
-                    }
+                  key={mode}
+                  onClick={() => setInteractionMode(mode)}
+                  style={{
+                    padding: isMobile ? '6px 10px' : '4px 10px',
+                    border: 'none', cursor: 'pointer',
+                    fontSize: isMobile ? '13px' : '12px',
+                    fontWeight: interactionMode === mode ? 'bold' : 'normal',
+                    backgroundColor: interactionMode === mode
+                      ? (mode === 'tts' ? '#2563eb' : mode === 'cursive' ? '#8b4513' : '#c41e3a')
+                      : 'transparent',
+                    color: interactionMode === mode ? '#fff' : '#666',
                   }}
-                  disabled={currentSentenceIndex >= sentences.length - 1}
-                  title="Next sentence"
-                  style={{ padding: '0 8px', border: '1px solid #c9b99a', borderRadius: 2, background: '#8b4513', color: '#f5f0e8', fontSize: 12, lineHeight: 1, cursor: 'pointer' }}
-                ><span style={{ fontSize: 10, marginRight: 4 }}>Nxt sent:</span>▼</button>
-                <span style={{ fontSize: 10, color: '#666', marginLeft: 4 }}>(&larr;, &rarr; keys work)</span>
+                >
+                  {mode === 'tts' ? 'TTS' : mode === 'cursive' ? 'Cursive' : 'Chinese'}
+                </button>
+              ))}
+            </div>
+
+            {/* Next sentence button */}
+            <button
+              onClick={() => {
+                const nextIndex = currentSentenceIndex + 1;
+                if (nextIndex < sentences.length) {
+                  setCurrentSentenceIndex(nextIndex);
+                  if (interactionMode === 'cursive') animateCursive(sentences[nextIndex]);
+                  else if (interactionMode === 'chinese') animateHanziSentence(sentences[nextIndex]);
+                  else speakSentence(sentences[nextIndex], nextIndex);
+                }
+              }}
+              disabled={currentSentenceIndex >= sentences.length - 1}
+              style={{ ...mobileBtn, background: '#8b4513', fontSize: isMobile ? '13px' : '12px', padding: isMobile ? '6px 12px' : '4px 8px' }}
+            >
+              Next ▼
+            </button>
+
+            {/* Speak button */}
+            <button onClick={speakCursiveOutput} style={{ ...mobileBtn, backgroundColor: '#10B981', fontSize: isMobile ? '13px' : '12px', padding: isMobile ? '6px 12px' : '4px 8px' }}
+              title={localStorage.getItem('OPENAI_API_KEY') ? 'Speak (OpenAI)' : 'Speak (browser)'}
+            >
+              Speak
+            </button>
+
+            {/* More toggle on mobile, inline controls on desktop */}
+            {isMobile ? (
+              <button
+                onClick={() => setShowMobileMenu(!showMobileMenu)}
+                style={{ ...mobileBtn, backgroundColor: showMobileMenu ? '#4B5563' : '#6b7280', marginLeft: 'auto', fontSize: '13px', padding: '6px 10px' }}
+              >
+                {showMobileMenu ? 'Less' : 'More'}
+              </button>
+            ) : (
+              <>
+                <span
+                  onClick={() => { setAutoAdvance(false); }}
+                  style={{ fontWeight: 'bold', fontSize: '12px', color: '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: !autoAdvance ? '#ffcdd2' : 'transparent' }}
+                >Stop After Line</span>
+                <label style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={autoAdvance} onChange={(e) => setAutoAdvance(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
+                  <span style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: autoAdvance ? '#4CAF50' : '#ddd', transition: '.4s', borderRadius: '24px' }}>
+                    <span style={{ position: 'absolute', height: '18px', width: '18px', left: autoAdvance ? '29px' : '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+                  </span>
+                </label>
+                <span onClick={() => setAutoAdvance(true)} style={{ fontWeight: 'bold', fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: autoAdvance ? '#c8e6c9' : 'transparent' }}>Auto Next Line</span>
+
+                {interactionMode === 'cursive' && (
+                  <>
+                    <label style={{ fontSize: '10px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                      Spd
+                      <input type="range" min="1" max="5" value={cursiveSpeed}
+                        onChange={(e) => { const v = parseInt(e.target.value); setCursiveSpeed(v); localStorage.setItem('tts-cursive-speed', v); }}
+                        style={{ width: '50px', accentColor: '#8b4513' }} />
+                    </label>
+                    <label style={{ fontSize: '10px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '2px' }}>
+                      Size
+                      <input type="range" min="28" max="80" value={cursiveSize}
+                        onChange={(e) => { const v = parseInt(e.target.value); setCursiveSize(v); localStorage.setItem('tts-cursive-size', v); }}
+                        style={{ width: '50px', accentColor: '#8b4513' }} />
+                    </label>
+                  </>
+                )}
+
+                <button onClick={() => setShowSyllables(s => { const next = !s; localStorage.setItem('tts-show-syllables', next); return next; })}
+                  style={{ marginLeft: 'auto', padding: '4px 12px', color: 'white', backgroundColor: showSyllables ? '#6366f1' : '#6b7280', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}
+                  title={showSyllables ? 'Syllables ON' : 'Show syllable breaks'}
+                >
+                  {showSyllables ? 'Syl: ON' : 'Syl'}
+                </button>
+
+                <button onClick={handlePasteFromClipboard} style={{ padding: '4px 12px', color: 'white', backgroundColor: '#10B981', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
+                  Paste from Clipboard
+                </button>
+
+                <span onClick={handleDarkModeToggle} style={{ padding: '4px 12px', color: 'white', backgroundColor: darkMode ? '#f59e0b' : '#374151', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', userSelect: 'none' }}>
+                  {darkMode ? 'Light' : 'Dark'}
+                </span>
+
+                <button onClick={() => { const next = ttsEngine === 'browser' ? 'openai' : 'browser'; setTtsEngine(next); localStorage.setItem('appTtsEngine', next); }}
+                  style={{ padding: '4px 12px', color: 'white', backgroundColor: ttsEngine === 'openai' ? '#16a34a' : '#6b7280', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}
+                  title={ttsEngine === 'openai' ? 'Using OpenAI TTS' : 'Using browser TTS'}
+                >
+                  {ttsEngine === 'openai' ? 'AI' : 'TTS'}
+                </button>
+
+                {ttsEngine === 'openai' && (
+                  <>
+                    <select value={openaiVoice} onChange={(e) => { setOpenaiVoice(e.target.value); localStorage.setItem('appOpenaiVoice', e.target.value); }}
+                      style={{ padding: '2px 6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #22c55e', backgroundColor: '#f0fdf4', color: '#166534' }}>
+                      <option value="onyx">Onyx</option><option value="nova">Nova</option><option value="alloy">Alloy</option>
+                      <option value="echo">Echo</option><option value="fable">Fable</option><option value="shimmer">Shimmer</option>
+                    </select>
+                    <button onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+                      style={{ padding: '4px 8px', fontSize: '12px', fontWeight: '600', borderRadius: '4px', border: 'none', cursor: 'pointer', backgroundColor: localStorage.getItem('OPENAI_API_KEY') ? '#dcfce7' : '#fee2e2', color: localStorage.getItem('OPENAI_API_KEY') ? '#166534' : '#991b1b' }}>
+                      Key
+                    </button>
+                    {showApiKeyInput && (
+                      <input type="text" placeholder="sk-..." value={apiKeyValue}
+                        onFocus={() => { if (apiKeyValue.startsWith('••••')) setApiKeyValue(''); }}
+                        onChange={(e) => setApiKeyValue(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && apiKeyValue && !apiKeyValue.startsWith('••••')) { localStorage.setItem('OPENAI_API_KEY', apiKeyValue); setApiKeyValue('••••' + apiKeyValue.slice(-4)); setShowApiKeyInput(false); } }}
+                        onBlur={() => { if (apiKeyValue && !apiKeyValue.startsWith('••••')) { localStorage.setItem('OPENAI_API_KEY', apiKeyValue); setApiKeyValue('••••' + apiKeyValue.slice(-4)); } }}
+                        style={{ padding: '2px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #22c55e', width: '150px' }}
+                      />
+                    )}
+                  </>
+                )}
               </>
             )}
-          </span>
+          </div>
 
-          <button
-            onClick={() => setShowSyllables(s => { const next = !s; localStorage.setItem('tts-show-syllables', next); return next; })}
-            style={{
-              marginLeft: 'auto',
-              padding: '4px 12px',
-              color: 'white',
-              backgroundColor: showSyllables ? '#6366f1' : '#6b7280',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: '600'
-            }}
-            title={showSyllables ? 'Syllables ON (click to hide)' : 'Show syllable breaks'}
-          >
-            {showSyllables ? 'Syl: ON' : 'Syl'}
-          </button>
+          {/* Mobile expanded menu */}
+          {isMobile && showMobileMenu && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '6px', borderTop: '1px solid #ddd' }}>
+              {/* Auto-advance toggle */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '13px', color: theme.text }}>Auto-advance:</span>
+                <label style={{ position: 'relative', display: 'inline-block', width: '44px', height: '24px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={autoAdvance} onChange={(e) => setAutoAdvance(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
+                  <span style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: autoAdvance ? '#4CAF50' : '#ddd', transition: '.4s', borderRadius: '24px' }}>
+                    <span style={{ position: 'absolute', height: '18px', width: '18px', left: autoAdvance ? '23px' : '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+                  </span>
+                </label>
+                <span style={{ fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#999' }}>{autoAdvance ? 'ON' : 'OFF'}</span>
+              </div>
 
-          <button
-            onClick={speakCursiveOutput}
-            style={{
-              padding: '4px 12px',
-              color: 'white',
-              backgroundColor: '#10B981',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: '600'
-            }}
-            title={localStorage.getItem('OPENAI_API_KEY') ? 'Speak cursive text (OpenAI)' : 'Speak cursive text (browser)'}
-          >
-            Speak
-          </button>
-
-          <button
-            onClick={handlePasteFromClipboard}
-            style={{
-              padding: '4px 12px',
-              color: 'white',
-              backgroundColor: '#10B981',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: '600'
-            }}
-          >
-            Paste from Clipboard
-          </button>
-
-          <span
-            onClick={handleDarkModeToggle}
-            style={{
-              padding: '4px 12px',
-              color: 'white',
-              backgroundColor: darkMode ? '#f59e0b' : '#374151',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: '600',
-              userSelect: 'none'
-            }}
-          >
-            {darkMode ? 'Light' : 'Dark'}
-          </span>
-
-          {/* TTS Engine Toggle */}
-          <button
-            onClick={() => {
-              const next = ttsEngine === 'browser' ? 'openai' : 'browser';
-              setTtsEngine(next);
-              localStorage.setItem('appTtsEngine', next);
-            }}
-            style={{
-              padding: '4px 12px',
-              color: 'white',
-              backgroundColor: ttsEngine === 'openai' ? '#16a34a' : '#6b7280',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: '600'
-            }}
-            title={ttsEngine === 'openai' ? 'Using OpenAI TTS (click for browser)' : 'Using browser TTS (click for OpenAI)'}
-          >
-            {ttsEngine === 'openai' ? 'AI' : 'TTS'}
-          </button>
-
-          {/* OpenAI voice + key */}
-          {ttsEngine === 'openai' && (
-            <>
-              <select
-                value={openaiVoice}
-                onChange={(e) => { setOpenaiVoice(e.target.value); localStorage.setItem('appOpenaiVoice', e.target.value); }}
-                style={{ padding: '2px 6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #22c55e', backgroundColor: '#f0fdf4', color: '#166534' }}
-                title="Select OpenAI voice"
-              >
-                <option value="onyx">Onyx</option>
-                <option value="nova">Nova</option>
-                <option value="alloy">Alloy</option>
-                <option value="echo">Echo</option>
-                <option value="fable">Fable</option>
-                <option value="shimmer">Shimmer</option>
-              </select>
-              <button
-                onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-                style={{
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  borderRadius: '4px',
-                  border: 'none',
-                  cursor: 'pointer',
-                  backgroundColor: localStorage.getItem('OPENAI_API_KEY') ? '#dcfce7' : '#fee2e2',
-                  color: localStorage.getItem('OPENAI_API_KEY') ? '#166534' : '#991b1b'
-                }}
-                title={localStorage.getItem('OPENAI_API_KEY') ? 'API key set — click to change' : 'No API key — click to enter'}
-              >
-                Key
-              </button>
-              {showApiKeyInput && (
-                <input
-                  type="text"
-                  placeholder="sk-..."
-                  value={apiKeyValue}
-                  onFocus={() => { if (apiKeyValue.startsWith('••••')) setApiKeyValue(''); }}
-                  onChange={(e) => setApiKeyValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && apiKeyValue && !apiKeyValue.startsWith('••••')) {
-                      localStorage.setItem('OPENAI_API_KEY', apiKeyValue);
-                      setApiKeyValue('••••' + apiKeyValue.slice(-4));
-                      setShowApiKeyInput(false);
-                    }
-                  }}
-                  onBlur={() => {
-                    if (apiKeyValue && !apiKeyValue.startsWith('••••')) {
-                      localStorage.setItem('OPENAI_API_KEY', apiKeyValue);
-                      setApiKeyValue('••••' + apiKeyValue.slice(-4));
-                    }
-                  }}
-                  style={{ padding: '2px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #22c55e', width: '150px' }}
-                  title="Paste OpenAI API key and press Enter"
-                />
+              {/* Cursive sliders */}
+              {interactionMode === 'cursive' && (
+                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                  <label style={{ fontSize: '12px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '4px', flex: 1 }}>
+                    Speed
+                    <input type="range" min="1" max="5" value={cursiveSpeed}
+                      onChange={(e) => { const v = parseInt(e.target.value); setCursiveSpeed(v); localStorage.setItem('tts-cursive-speed', v); }}
+                      style={{ flex: 1, accentColor: '#8b4513' }} />
+                  </label>
+                  <label style={{ fontSize: '12px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '4px', flex: 1 }}>
+                    Size
+                    <input type="range" min="28" max="80" value={cursiveSize}
+                      onChange={(e) => { const v = parseInt(e.target.value); setCursiveSize(v); localStorage.setItem('tts-cursive-size', v); }}
+                      style={{ flex: 1, accentColor: '#8b4513' }} />
+                  </label>
+                </div>
               )}
-            </>
+
+              {/* Secondary buttons row */}
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button onClick={() => setShowSyllables(s => { const next = !s; localStorage.setItem('tts-show-syllables', next); return next; })}
+                  style={{ ...mobileBtn, backgroundColor: showSyllables ? '#6366f1' : '#6b7280', fontSize: '12px', padding: '6px 10px' }}>
+                  {showSyllables ? 'Syl: ON' : 'Syl'}
+                </button>
+                <span onClick={handleDarkModeToggle} style={{ ...mobileBtn, backgroundColor: darkMode ? '#f59e0b' : '#374151', fontSize: '12px', padding: '6px 10px', userSelect: 'none' }}>
+                  {darkMode ? 'Light' : 'Dark'}
+                </span>
+                <button onClick={() => { const next = ttsEngine === 'browser' ? 'openai' : 'browser'; setTtsEngine(next); localStorage.setItem('appTtsEngine', next); }}
+                  style={{ ...mobileBtn, backgroundColor: ttsEngine === 'openai' ? '#16a34a' : '#6b7280', fontSize: '12px', padding: '6px 10px' }}>
+                  {ttsEngine === 'openai' ? 'AI TTS' : 'Browser TTS'}
+                </button>
+                <a href="/youtubetranscriptreader.html" style={{ ...mobileBtn, background: '#6366f1', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', fontSize: '12px', padding: '6px 10px' }}>
+                  📖▶
+                </a>
+              </div>
+
+              {/* Language & rate */}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)}
+                  style={{ flex: 1, padding: '6px', border: `1px solid ${theme.inputBorder}`, borderRadius: '6px', backgroundColor: theme.inputBg, color: theme.text, fontSize: '14px' }}>
+                  <option value="zh-HK">Cantonese</option><option value="en-US">English</option><option value="fr-FR">French</option>
+                  <option value="es-ES">Spanish</option><option value="zh-CN">Mandarin</option><option value="ko-KR">Korean</option><option value="he-IL">Hebrew</option>
+                </select>
+                <select value={speechRate} onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
+                  style={{ padding: '6px', border: `1px solid ${theme.inputBorder}`, borderRadius: '6px', backgroundColor: theme.inputBg, color: theme.text, fontSize: '14px' }}>
+                  <option value="1">1x</option><option value="1.5">1.5x</option><option value="0.7">0.7x</option>
+                </select>
+              </div>
+
+              {/* OpenAI settings if active */}
+              {ttsEngine === 'openai' && (
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <select value={openaiVoice} onChange={(e) => { setOpenaiVoice(e.target.value); localStorage.setItem('appOpenaiVoice', e.target.value); }}
+                    style={{ padding: '6px', fontSize: '13px', borderRadius: '6px', border: '1px solid #22c55e', backgroundColor: '#f0fdf4', color: '#166534' }}>
+                    <option value="onyx">Onyx</option><option value="nova">Nova</option><option value="alloy">Alloy</option>
+                    <option value="echo">Echo</option><option value="fable">Fable</option><option value="shimmer">Shimmer</option>
+                  </select>
+                  <button onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+                    style={{ ...mobileBtn, fontSize: '12px', padding: '6px 10px', backgroundColor: localStorage.getItem('OPENAI_API_KEY') ? '#dcfce7' : '#fee2e2', color: localStorage.getItem('OPENAI_API_KEY') ? '#166534' : '#991b1b' }}>
+                    Key
+                  </button>
+                  {showApiKeyInput && (
+                    <input type="text" placeholder="sk-..." value={apiKeyValue}
+                      onFocus={() => { if (apiKeyValue.startsWith('••••')) setApiKeyValue(''); }}
+                      onChange={(e) => setApiKeyValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && apiKeyValue && !apiKeyValue.startsWith('••••')) { localStorage.setItem('OPENAI_API_KEY', apiKeyValue); setApiKeyValue('••••' + apiKeyValue.slice(-4)); setShowApiKeyInput(false); } }}
+                      onBlur={() => { if (apiKeyValue && !apiKeyValue.startsWith('••••')) { localStorage.setItem('OPENAI_API_KEY', apiKeyValue); setApiKeyValue('••••' + apiKeyValue.slice(-4)); } }}
+                      style={{ flex: 1, padding: '6px', fontSize: '14px', borderRadius: '6px', border: '1px solid #22c55e' }}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
 
         {/* Cursive output area - inside sticky container */}
         {interactionMode === 'cursive' && (
           <div style={{
-            padding: '24px',
+            padding: isMobile ? '16px' : '24px',
             background: '#f5f0e8',
             backgroundImage: 'repeating-linear-gradient(transparent, transparent 31px, #c9b99a 31px, #c9b99a 32px)',
             borderRadius: '0 0 8px 8px',
             border: '2px solid #c9b99a',
             borderTop: 'none',
-            minHeight: '150px',
+            minHeight: isMobile ? '100px' : '150px',
             maxHeight: '300px',
             overflowY: 'auto',
             boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
@@ -1198,7 +1119,7 @@ const TextToSpeechComponent = () => {
               ref={cursiveOutputRef}
               style={{
                 fontFamily: "'Alex Brush', cursive",
-                fontSize: cursiveSize + 'px',
+                fontSize: (isMobile ? Math.min(cursiveSize, 44) : cursiveSize) + 'px',
                 lineHeight: 1.25,
                 color: '#1a1209',
                 wordBreak: 'break-word'
@@ -1210,7 +1131,7 @@ const TextToSpeechComponent = () => {
         {/* Chinese (Hanzi Writer) output area - inside sticky container */}
         {interactionMode === 'chinese' && (
           <div style={{
-            padding: '16px 24px',
+            padding: isMobile ? '12px' : '16px 24px',
             background: '#faf8f3',
             borderRadius: '0 0 8px 8px',
             border: '2px solid #c9b99a',
@@ -1224,10 +1145,7 @@ const TextToSpeechComponent = () => {
                 {hanziChars.map((ch, i) => (
                   <button
                     key={i}
-                    onClick={() => {
-                      setHanziActiveIdx(i);
-                      buildHanziWriter(ch, true);
-                    }}
+                    onClick={() => { setHanziActiveIdx(i); buildHanziWriter(ch, true); }}
                     style={{
                       fontSize: '24px', lineHeight: 1, padding: '8px 12px',
                       background: i === hanziActiveIdx ? '#8b4513' : '#fff',
@@ -1245,7 +1163,7 @@ const TextToSpeechComponent = () => {
               </div>
             )}
             {/* Writer canvas */}
-            <div style={{ display: 'flex', justifyContent: 'center', background: '#f1ede4', borderRadius: '12px', padding: '16px', marginBottom: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'center', background: '#f1ede4', borderRadius: '12px', padding: isMobile ? '8px' : '16px', marginBottom: '10px' }}>
               <div
                 ref={hanziTargetRef}
                 style={{
@@ -1284,14 +1202,14 @@ const TextToSpeechComponent = () => {
 
         {/* Reading Area - Clickable Sentence Divs */}
         {sentences.length > 0 && (
-          <div style={{ marginTop: '1.5rem' }}>
-            <h3 style={{ color: theme.heading }}>Click any sentence to {interactionMode === 'cursive' ? 'write it in cursive' : interactionMode === 'chinese' ? 'animate its characters' : 'read it aloud'}:</h3>
+          <div style={{ marginTop: isMobile ? '0.75rem' : '1.5rem' }}>
+            {!isMobile && <h3 style={{ color: theme.heading }}>Click any sentence to {interactionMode === 'cursive' ? 'write it in cursive' : interactionMode === 'chinese' ? 'animate its characters' : 'read it aloud'}:</h3>}
             <div style={{
               backgroundColor: theme.cardBg,
               border: `2px solid ${theme.cardBorder}`,
               borderRadius: '0.5rem',
-              padding: '1.5rem',
-              minHeight: '200px',
+              padding: isMobile ? '0.75rem' : '1.5rem',
+              minHeight: isMobile ? '100px' : '200px',
               fontSize: `${fontSize}rem`,
               lineHeight: '1.8'
             }}>
@@ -1309,7 +1227,7 @@ const TextToSpeechComponent = () => {
                     }
                   }}
                   style={{
-                    padding: '0.75rem',
+                    padding: isMobile ? '0.5rem' : '0.75rem',
                     marginBottom: '0.5rem',
                     cursor: 'pointer',
                     borderRadius: '0.25rem',
@@ -1331,43 +1249,30 @@ const TextToSpeechComponent = () => {
         )}
       </div>
 
-      {/* Controls */}
-      <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-
-        <select 
-          id="languageSelect" 
-          value={selectedLanguage} 
-          onChange={(e) => setSelectedLanguage(e.target.value)}
-          style={{ padding: '0.5rem', border: `1px solid ${theme.inputBorder}`, borderRadius: '0.25rem', backgroundColor: theme.inputBg, color: theme.text }}
-        >
-          <option value="zh-HK">Cantonese</option>
-          <option value="en-US">English</option>
-          <option value="fr-FR">French</option>
-          <option value="es-ES">Spanish</option>
-          <option value="zh-CN">Mandarin</option>
-          <option value="ko-KR">Korean</option>
-          <option value="he-IL">Hebrew</option>
-        </select>
-
-        <select 
-          id="rateSelect" 
-          value={speechRate} 
-          onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
-          style={{ padding: '0.5rem', border: `1px solid ${theme.inputBorder}`, borderRadius: '0.25rem', backgroundColor: theme.inputBg, color: theme.text }}
-        >
-          <option value="1">1x</option>
-          <option value="1.5">1.5x</option>
-          <option value="0.7">0.7x</option>
-        </select>
-      </div>
-
-        {/* Debug Info */}
-        <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: theme.textSecondary }}>
-          <p>Available voices: {availableVoices.length}</p>
-          <p>Current language: {selectedLanguage}</p>
-          <p>Speech rate: {speechRate}x</p>
-          <p><strong>Last Used Voice:</strong> <span style={{color: '#2563eb', fontWeight: 'bold'}}>{lastUsedVoice}</span></p>
+      {/* Controls - desktop only */}
+      {!isMobile && (
+        <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select id="languageSelect" value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)}
+            style={{ padding: '0.5rem', border: `1px solid ${theme.inputBorder}`, borderRadius: '0.25rem', backgroundColor: theme.inputBg, color: theme.text }}>
+            <option value="zh-HK">Cantonese</option><option value="en-US">English</option><option value="fr-FR">French</option>
+            <option value="es-ES">Spanish</option><option value="zh-CN">Mandarin</option><option value="ko-KR">Korean</option><option value="he-IL">Hebrew</option>
+          </select>
+          <select id="rateSelect" value={speechRate} onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
+            style={{ padding: '0.5rem', border: `1px solid ${theme.inputBorder}`, borderRadius: '0.25rem', backgroundColor: theme.inputBg, color: theme.text }}>
+            <option value="1">1x</option><option value="1.5">1.5x</option><option value="0.7">0.7x</option>
+          </select>
         </div>
+      )}
+
+        {/* Debug Info - desktop only */}
+        {!isMobile && (
+          <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: theme.textSecondary }}>
+            <p>Available voices: {availableVoices.length}</p>
+            <p>Current language: {selectedLanguage}</p>
+            <p>Speech rate: {speechRate}x</p>
+            <p><strong>Last Used Voice:</strong> <span style={{color: '#2563eb', fontWeight: 'bold'}}>{lastUsedVoice}</span></p>
+          </div>
+        )}
       </div>
     </div>
   );
