@@ -15,9 +15,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Text is parsed into items (title, source URL, headings, paragraphs, list items, quotes, and
 unspoken labels such as `[0:01:23]` timestamps and `Author:` lines), split into sentences, then
-paginated **at sentence boundaries** so the voice never stops mid-thought. Playback speaks one
-sentence at a time and highlights it; at the end of a page a two-tone WebAudio chime sounds, the
-page turns on its own, and reading continues.
+paginated **at sentence boundaries** so the voice never stops mid-thought. Pages are cut by
+*measuring*, not by character count: `measureColumns` fills a hidden `.sheet.measure` of the exact
+on-screen page size until the next sentence would overflow, so the page never scrolls. Wide screens
+(≥940px of stage) show two facing pages as one spread; phones show one. Re-measuring (resize, text
+size, fonts loading) keeps the current sentence in view, and saved positions use `g`, the sentence
+number from the top, so they survive a different screen. Playback speaks one sentence at a time and
+highlights it; at the end of a spread a two-tone WebAudio chime sounds, the pages turn on their own,
+and reading continues.
 
 - Tap a sentence to read from there. Space pauses/resumes, ←/→ turn pages, ↑/↓ step a sentence.
 - Two engines: the browser's `speechSynthesis` (default, prefers an Enhanced/Premium English

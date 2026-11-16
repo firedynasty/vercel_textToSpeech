@@ -1,14 +1,16 @@
 // Page Turner — a Kindle-style read-aloud reader.
 //
-// The text is split into sentences, paginated at sentence boundaries, and read
-// aloud one sentence at a time. At the end of a page a chime sounds, the page
-// turns on its own, and reading continues. Tap any sentence to start there.
+// The text is split into sentences, cut into pages that exactly fit the screen
+// (breaking only between sentences), and read aloud one sentence at a time. A
+// wide screen shows two facing pages, like an open book. At the end of a spread
+// a chime sounds, the pages turn on their own, and reading continues. Tap any
+// sentence to start there.
 //
 // Articles live in a library backed by Vercel Blob (/api/files), so the queue
 // you build with the Page Scraper extension follows you between devices. On
 // localhost the same library is kept in localStorage.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './reader.css';
 
 /* ============================== text parsing ============================== */
@@ -111,60 +113,126 @@ function parseDoc(raw) {
 
 const SPOKEN = { title: true, head: true, p: true, li: true, quote: true };
 
-// Break items into pages at sentence boundaries so the voice never stops mid-thought.
-function paginate(items, budget) {
-  const pages = [];
-  let page = [];
-  let used = 0;
-  const flushPage = () => { if (page.length) pages.push(page); page = []; used = 0; };
+/* ============================== pagination ==============================
+   Pages are cut by measuring, not by counting characters: each column is filled
+   in a hidden sheet of exactly the on-screen size until the next sentence would
+   overflow, so a page never scrolls. Breaks still fall only between sentences.
+   Columns are then grouped into spreads (two facing pages on a wide screen). */
 
-  for (const it of items) {
-    if (it.type === 'title') { page.push(it); used += it.text.length * 1.6 + 40; continue; }
-    if (it.type === 'source' || it.type === 'label' || it.type === 'rule') {
-      page.push(it); used += 30; continue;
-    }
-    if (it.type === 'head') {
-      if (used > budget * 0.6) flushPage();
-      page.push(it); used += it.text.length + 70; continue;
-    }
-    if (it.type === 'li' || it.type === 'quote') {
-      if (used >= budget) flushPage();
-      page.push(it); used += it.text.length + 20; continue;
-    }
-    let chunk = { type: 'p', sents: [], cont: false };
-    page.push(chunk);
-    for (const s of it.sents) {
-      chunk.sents.push(s);
-      used += s.length + 1;
-      if (used >= budget) {
-        flushPage();
-        chunk = { type: 'p', sents: [], cont: true };
-        page.push(chunk);
-      }
-    }
-    if (!chunk.sents.length) page.pop();
-  }
-  flushPage();
-
-  const out = pages.map((list) => ({ items: list }));
-  // Never leave a heading stranded as the last thing on a page.
-  for (let k = 0; k < out.length - 1; k++) {
-    const last = out[k].items[out[k].items.length - 1];
-    if (last && last.type === 'head' && out[k].items.length > 1) {
-      out[k].items.pop();
-      out[k + 1].items.unshift(last);
-    }
-  }
-  return out.length ? out : [{ items: [{ type: 'p', sents: ['Nothing to read yet. Open the library or paste some text.'] }] }];
+// Paragraphs split into one piece per sentence; everything else is one piece.
+function piecesOf(items) {
+  const out = [];
+  items.forEach((it, i) => {
+    if (it.type === 'p') it.sents.forEach((_, s) => out.push({ i, s }));
+    else out.push({ i });
+  });
+  return out;
 }
 
-// The flat list of spoken sentences on a page, in reading order.
-function unitsOf(page) {
+// Rebuild the items for pieces [a, b), regrouping sentences into paragraph chunks.
+function itemsFromRange(items, pieces, a, b) {
   const out = [];
-  (page ? page.items : []).forEach((it, idx) => {
+  let chunk = null;
+  for (let k = a; k < b; k++) {
+    const { i, s } = pieces[k];
+    if (s === undefined) { chunk = null; out.push(items[i]); continue; }
+    if (!chunk || chunk.src !== i) {
+      chunk = { type: 'p', sents: [], cont: s > 0, src: i };
+      out.push(chunk);
+    }
+    chunk.sents.push(items[i].sents[s]);
+  }
+  return out;
+}
+
+const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const spansHTML = (sents) => sents.map((s, k) => '<span class="s">' + esc(k === sents.length - 1 ? s : s + ' ') + '</span>').join('');
+
+// Same markup and classes as the rendered page, for measuring only.
+function pageHTML(list) {
+  let h = list.some((it) => it.type === 'title') ? '' : '<p class="kicker">Continued</p>';
+  let inList = false;
+  for (const it of list) {
+    if (it.type !== 'li' && inList) { h += '</ul>'; inList = false; }
+    if (it.type === 'title') h += '<p class="kicker">Now reading</p><h1 class="title">' + spansHTML(it.sents) + '</h1>';
+    else if (it.type === 'source') h += '<p class="source">' + esc(it.text) + '</p>';
+    else if (it.type === 'label') h += '<p class="label">' + esc(it.text) + '</p>';
+    else if (it.type === 'rule') h += '<hr class="rule">';
+    else if (it.type === 'head') { const t = it.level <= 1 ? 'h2' : 'h3'; h += '<' + t + ' class="head">' + spansHTML(it.sents) + '</' + t + '>'; }
+    else if (it.type === 'quote') h += '<blockquote class="quote">' + spansHTML(it.sents) + '</blockquote>';
+    else if (it.type === 'li') { if (!inList) { h += '<ul class="list">'; inList = true; } h += '<li class="item">' + spansHTML(it.sents) + '</li>'; }
+    else h += '<p class="body' + (it.cont ? ' cont' : '') + '">' + spansHTML(it.sents) + '</p>';
+  }
+  return inList ? h + '</ul>' : h;
+}
+
+// Fill columns greedily using the hidden measuring sheet's body.
+function measureColumns(items, body) {
+  const pieces = piecesOf(items);
+  const n = pieces.length;
+  const fits = (a, b) => {
+    body.innerHTML = pageHTML(itemsFromRange(items, pieces, a, b));
+    return body.scrollHeight <= body.clientHeight + 1;
+  };
+  const cols = [];
+  let a = 0;
+  while (a < n) {
+    let good = a + 1; // one piece always goes, even a sentence too tall for any page
+    if (fits(a, good)) {
+      // Gallop out, then binary-search back to the last piece that fits.
+      let step = 1;
+      let bad = -1;
+      while (good < n) {
+        const t = Math.min(n, good + step);
+        if (fits(a, t)) { good = t; step *= 2; } else { bad = t; break; }
+      }
+      if (bad > 0) {
+        let lo = good;
+        let hi = bad;
+        while (hi - lo > 1) { const m = (lo + hi) >> 1; if (fits(a, m)) lo = m; else hi = m; }
+        good = lo;
+      }
+    }
+    // Never leave a heading stranded as the last thing on a page.
+    const lastType = items[pieces[good - 1].i].type;
+    if (good < n && good - a > 1 && (lastType === 'head' || lastType === 'title')) good -= 1;
+    cols.push(itemsFromRange(items, pieces, a, good));
+    a = good;
+  }
+  body.innerHTML = '';
+  return cols;
+}
+
+const NOTHING = [{ type: 'p', sents: ['Nothing to read yet. Open the library or paste some text.'] }];
+
+// Group columns into spreads. `first` is the first column's number, `start` the
+// spread's first sentence counted from the top of the article.
+function groupSpreads(cols, per) {
+  const list = cols.length ? cols : [NOTHING];
+  const out = [];
+  let start = 0;
+  for (let k = 0; k < list.length; k += per) {
+    const sp = { cols: list.slice(k, k + per), first: k, start };
+    start += unitsOf(sp).length;
+    out.push(sp);
+  }
+  return out;
+}
+
+// The spread holding sentence number g.
+const spreadFor = (spreads, g) => {
+  let p = 0;
+  for (let k = 0; k < spreads.length; k++) if (spreads[k].start <= g) p = k;
+  return p;
+};
+
+// The flat list of spoken sentences on a spread, in reading order.
+function unitsOf(spread) {
+  const out = [];
+  (spread ? spread.cols : []).forEach((col) => col.forEach((it) => {
     if (!SPOKEN[it.type] || !it.sents) return;
-    it.sents.forEach((text, k) => out.push({ text, item: idx, sent: k }));
-  });
+    it.sents.forEach((text) => out.push({ text }));
+  }));
   return out;
 }
 
@@ -270,7 +338,6 @@ const PageTurnerReader = () => {
   /* ---- settings (persisted) ---- */
   const [dark, setDark] = useState(() => lsGet('pt.dark', '') === '1');
   const [rate, setRate] = useState(() => parseFloat(lsGet('pt.rate', '1')) || 1);
-  const [budget, setBudget] = useState(() => parseInt(lsGet('pt.budget', '950'), 10) || 950);
   const [size, setSize] = useState(() => parseInt(lsGet('pt.size', '21'), 10) || 21);
   const [ding, setDing] = useState(() => lsGet('pt.ding', '1') !== '0');
   const [voiceURI, setVoiceURI] = useState(() => lsGet('pt.voice', ''));
@@ -295,8 +362,14 @@ const PageTurnerReader = () => {
   const [leaving, setLeaving] = useState(null);
   const [voices, setVoices] = useState([]);
 
+  /* ---- layout: column size, columns per spread, and the measured spreads ---- */
+  const [box, setBox] = useState(null);
+  const [fontsTick, setFontsTick] = useState(0);
+  const [pages, setPages] = useState(() => groupSpreads([], 1));
+
   const stageRef = useRef(null);
-  const sheetRef = useRef(null);
+  const measureRef = useRef(null);
+  const pendingRef = useRef(null); // where to land after the next re-measure
   const genRef = useRef(0);
   const timerRef = useRef(null);
   const actxRef = useRef(null);
@@ -306,7 +379,7 @@ const PageTurnerReader = () => {
   const posTimer = useRef(null);
   const restoredRef = useRef(false);
 
-  const pages = useMemo(() => paginate(parseDoc(text), budget), [text, budget]);
+  const items = useMemo(() => parseDoc(text), [text]);
 
   // Refs mirror state so speech callbacks never read a stale closure.
   const pagesRef = useRef(pages); pagesRef.current = pages;
@@ -333,9 +406,15 @@ const PageTurnerReader = () => {
 
   const savePosition = (page, unit) => {
     const name = docNameRef.current;
-    if (!name) { lsSet('pt.scratchPos', JSON.stringify({ page, unit })); return; }
+    if (!name) {
+      const s0 = pagesRef.current[page];
+      lsSet('pt.scratchPos', JSON.stringify({ page, unit, g: (s0 ? s0.start : 0) + Math.max(unit, 0) }));
+      return;
+    }
     const map = lsJSON('pt.pos', {});
-    map[name] = { page, unit, at: Date.now() };
+    const sp = pagesRef.current[page];
+    // `g` (sentence from the top) survives a different screen size; `page` does not.
+    map[name] = { page, unit, g: (sp ? sp.start : 0) + Math.max(unit, 0), at: Date.now() };
     lsSet('pt.pos', JSON.stringify(map));
     if (IS_LOCAL) return;
     clearTimeout(posTimer.current);
@@ -519,7 +598,6 @@ const PageTurnerReader = () => {
       unitRef.current = -1;
       setUnitIdx(-1);
       setLeaving(null);
-      if (stageRef.current) stageRef.current.scrollTop = 0;
       savePosition(n, 0);
       if (done) done();
     };
@@ -565,16 +643,32 @@ const PageTurnerReader = () => {
     docNameRef.current = name || null;
     lsSet('pt.text', newText);
     lsSet('pt.docName', name || '');
-    const built = paginate(parseDoc(newText), budget);
-    pagesRef.current = built;
-    const pos = startAt || positionFor(name || null);
-    const p = Math.min(Math.max(pos.page || 0, 0), built.length - 1);
-    pageRef.current = p;
-    setPageIdx(p);
     unitRef.current = -1;
     setUnitIdx(-1);
-    if (stageRef.current) stageRef.current.scrollTop = 0;
+    // The new text is measured in a layout effect; land there once it is.
+    pendingRef.current = startAt || positionFor(name || null);
+    if (newText === text) remeasure();
   };
+
+  // Put the reader at a saved position on the current spreads.
+  const jumpTo = (pos) => {
+    const list = pagesRef.current;
+    let p;
+    let unit = -1;
+    if (pos && pos.g != null) {
+      p = spreadFor(list, pos.g);
+      unit = pos.g > 0 ? pos.g - list[p].start : -1;
+    } else {
+      p = Math.min(Math.max((pos && pos.page) || 0, 0), list.length - 1);
+    }
+    pageRef.current = p;
+    setPageIdx(p);
+    unitRef.current = unit;
+    setUnitIdx(unit);
+  };
+
+  const [measureTick, setMeasureTick] = useState(0);
+  const remeasure = () => setMeasureTick((t) => t + 1);
 
   const openDoc = async (doc) => {
     setBusy('Opening…');
@@ -615,6 +709,33 @@ const PageTurnerReader = () => {
       console.error(e);
       flash('Save failed: ' + e.message);
       return null;
+    } finally {
+      setBusy('');
+    }
+  };
+
+  // Hand a text to the browser as a .txt download.
+  const saveFile = (name, content) => {
+    const url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = /\.txt$/i.test(name) ? name : name + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  // Download the open article, or a library article fetched fresh from storage.
+  const downloadDoc = async (doc, e) => {
+    if (e) e.stopPropagation();
+    if (!doc) { saveFile(docNameRef.current || slugify(titleOf(text)), text); return; }
+    setBusy('Downloading…');
+    try {
+      saveFile(doc.name, await store.get(doc.name));
+    } catch (err) {
+      console.error(err);
+      flash('Download failed');
     } finally {
       setBusy('');
     }
@@ -715,33 +836,68 @@ const PageTurnerReader = () => {
           return;
         } catch { /* fall through to the cached copy */ }
       }
-      const pos = positionFor(name);
-      const p = Math.min(Math.max(pos.page || 0, 0), pagesRef.current.length - 1);
-      pageRef.current = p;
-      setPageIdx(p);
+      jumpTo(positionFor(name));
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the spoken sentence on screen.
-  useEffect(() => {
-    if (unitIdx < 0 || !sheetRef.current || !stageRef.current) return;
-    const el = sheetRef.current.querySelector('[data-unit="' + unitIdx + '"]');
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const s = stageRef.current.getBoundingClientRect();
-    if (r.top < s.top + 24 || r.bottom > s.bottom - 24) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [unitIdx]);
+  // Size the page to the space between the bars: two facing pages when there is
+  // room for both at a comfortable line length, otherwise one.
+  useLayoutEffect(() => {
+    const el = stageRef.current;
+    if (!el) return undefined;
+    const read = () => {
+      const cs = getComputedStyle(el);
+      const w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const h = Math.floor(el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom));
+      const per = w >= 940 && h >= 360 ? 2 : 1;
+      const gap = per === 2 ? 26 : 0;
+      const colW = Math.floor(Math.min(per === 2 ? 640 : 680, (w - gap) / per));
+      setBox((b) => (b && b.w === colW && b.h === h && b.per === per ? b : { w: colW, h, per, gap }));
+    };
+    read();
+    let t;
+    const ro = new ResizeObserver(() => { clearTimeout(t); t = setTimeout(read, 120); });
+    ro.observe(el);
+    return () => { ro.disconnect(); clearTimeout(t); };
+  }, []);
 
-  // Re-paginating (page length, new text) must not leave us past the end.
+  // Web fonts change line breaks, so measure again once they arrive.
   useEffect(() => {
-    if (pageRef.current > pages.length - 1) {
-      const p = Math.max(0, pages.length - 1);
-      pageRef.current = p;
-      setPageIdx(p);
-    }
-  }, [pages]);
+    const f = document.fonts;
+    if (!f) return undefined;
+    const bump = () => setFontsTick((t) => t + 1);
+    f.ready.then(bump);
+    f.addEventListener('loadingdone', bump);
+    return () => f.removeEventListener('loadingdone', bump);
+  }, []);
+
+  // Cut the text into screen-sized pages. Whatever sentence the reader was on
+  // stays the one in view, so a resize or a new text size never loses the place.
+  useLayoutEffect(() => {
+    if (!box || !measureRef.current) return;
+    const body = measureRef.current.querySelector('.sheet-body');
+    const old = pagesRef.current[pageRef.current];
+    const anchor = old ? old.start + Math.max(unitRef.current, 0) : 0;
+    const hadUnit = unitRef.current >= 0;
+    const next = groupSpreads(measureColumns(items, body), box.per);
+    pagesRef.current = next;
+    setPages(next);
+
+    const pend = pendingRef.current;
+    pendingRef.current = null;
+    if (pend) { jumpTo(pend); return; }
+    const p = spreadFor(next, anchor);
+    pageRef.current = p;
+    setPageIdx(p);
+    const unit = hadUnit ? anchor - next[p].start : -1;
+    unitRef.current = unit;
+    setUnitIdx(unit);
+    // Mid-sentence when the layout changed: start that sentence again in its new place.
+    if (playingRef.current && unit >= 0) speakAt(unit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, box, size, fontsTick, measureTick]);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -768,7 +924,6 @@ const PageTurnerReader = () => {
 
   useEffect(() => { lsSet('pt.dark', dark ? '1' : '0'); }, [dark]);
   useEffect(() => { lsSet('pt.rate', String(rate)); }, [rate]);
-  useEffect(() => { lsSet('pt.budget', String(budget)); }, [budget]);
   useEffect(() => { lsSet('pt.size', String(size)); }, [size]);
   useEffect(() => { lsSet('pt.ding', ding ? '1' : '0'); }, [ding]);
   useEffect(() => { lsSet('pt.voice', voiceURI || ''); }, [voiceURI]);
@@ -777,14 +932,21 @@ const PageTurnerReader = () => {
 
   /* ------------------------------ rendering ------------------------------ */
 
-  const page = pages[Math.min(pageIdx, pages.length - 1)] || pages[0];
+  const spread = pages[Math.min(pageIdx, pages.length - 1)] || pages[0];
   const progress = pages.length ? ((pageIdx + 1) / pages.length) * 100 : 0;
   const docTitle = (docName && (docs.find((d) => d.name === docName) || {}).title) || titleOf(text);
-  const hasTitleBlock = page.items.some((it) => it.type === 'title');
+  const totalCols = pages.reduce((sum, sp) => sum + sp.cols.length, 0);
+  const shownCols = spread.cols.length;
+  const pageLabel = shownCols > 1
+    ? 'Pages ' + (spread.first + 1) + '–' + (spread.first + shownCols) + ' of ' + totalCols
+    : 'Page ' + (spread.first + 1) + ' of ' + totalCols;
+  // Characters per spread on this screen, to estimate other articles' lengths.
+  const perSpread = Math.max(400, text.length / Math.max(1, pages.length));
 
-  const renderPage = () => {
+  // Sentence numbers run on across both pages of a spread.
+  let n = 0;
+  const renderPage = (list) => {
     const out = [];
-    let n = 0;
     let listBuf = [];
     const flushList = (key) => {
       if (!listBuf.length) return;
@@ -813,7 +975,7 @@ const PageTurnerReader = () => {
     };
     const sentencesOf = (it, i) => it.sents.map((s, k) => sentence(s, i, k, k === it.sents.length - 1));
 
-    page.items.forEach((it, i) => {
+    list.forEach((it, i) => {
       if (it.type !== 'li') flushList(i);
       if (it.type === 'title') {
         out.push(<p className="kicker" key={'k' + i}>Now reading</p>);
@@ -885,6 +1047,7 @@ const PageTurnerReader = () => {
             <div className="actions">
               <button className="btn accent" onClick={() => fromClipboard({ save: true })}>Add from clipboard</button>
               <button className="btn" onClick={() => saveDoc()} disabled={!text.trim()}>Save current</button>
+              <button className="btn" onClick={() => downloadDoc()} disabled={!text.trim()}>Download current</button>
               <button className="btn sm" onClick={refreshLibrary}>Refresh</button>
             </div>
             <div className="list">
@@ -896,7 +1059,7 @@ const PageTurnerReader = () => {
               )}
               {docs.map((d) => {
                 const pos = positionFor(d.name);
-                const est = d.name === docName ? pages.length : Math.max(1, Math.ceil((d.chars || 0) / budget));
+                const est = d.name === docName ? pages.length : Math.max(1, Math.ceil((d.chars || 0) / perSpread));
                 const pct = Math.min(100, Math.round(((pos.page || 0) + 1) / est * 100));
                 const chars = d.chars || 0;
                 const charLabel = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k chars' : chars + ' chars';
@@ -918,6 +1081,7 @@ const PageTurnerReader = () => {
                       </div>
                       {pos.page > 0 && <div className="bar"><i style={{ width: pct + '%' }} /></div>}
                     </div>
+                    <button className="btn sm" onClick={(e) => downloadDoc(d, e)} aria-label={'Download ' + d.title}>Download</button>
                     <button className="btn sm danger" onClick={(e) => deleteDoc(d, e)} aria-label={'Delete ' + d.title}>Delete</button>
                   </div>
                 );
@@ -929,15 +1093,38 @@ const PageTurnerReader = () => {
 
       {/* ---------- the page ---------- */}
       <main className="stage" ref={stageRef}>
-        <article className={'sheet' + (leaving ? ' leaving' : '') + (leaving === 'back' ? ' back' : '')} ref={sheetRef}>
-          {!hasTitleBlock && <p className="kicker">Continued</p>}
-          {renderPage()}
-          <div className="folio">
-            <span>{docName ? 'Library' : 'Unsaved'}</span>
-            <span>{pageIdx + 1} / {pages.length}</span>
+        {box && (
+          <div
+            className={'spread' + (leaving ? ' leaving' : '') + (leaving === 'back' ? ' back' : '')}
+            style={{ gap: box.gap }}
+          >
+            {Array.from({ length: box.per }, (_, c) => {
+              const col = spread.cols[c];
+              const dims = { width: box.w, height: box.h };
+              // The last spread can have an empty right-hand page; keep it so the left one stays put.
+              if (!col) return <div className="sheet blank" style={dims} key={c} aria-hidden="true" />;
+              return (
+                <article className="sheet" style={dims} key={c}>
+                  <div className="sheet-body">
+                    {c === 0 && !col.some((it) => it.type === 'title') && <p className="kicker">Continued</p>}
+                    {renderPage(col)}
+                  </div>
+                  <div className="folio">
+                    <span>{c === 0 ? (docName ? 'Library' : 'Unsaved') : docTitle}</span>
+                    <span>{spread.first + c + 1} / {totalCols}</span>
+                  </div>
+                </article>
+              );
+            })}
           </div>
-        </article>
+        )}
       </main>
+
+      {/* Hidden sheet at the on-screen page size, used only to measure page breaks. */}
+      <article className="sheet measure" ref={measureRef} style={box ? { width: box.w, height: box.h } : undefined} aria-hidden="true">
+        <div className="sheet-body" />
+        <div className="folio"><span>Library</span><span>1 / 1</span></div>
+      </article>
 
       {/* ---------- transport ---------- */}
       <footer className="bar">
@@ -957,7 +1144,7 @@ const PageTurnerReader = () => {
           <button className="tbtn more" onClick={() => setOptsOpen((v) => !v)} aria-label="Reading settings" aria-expanded={optsOpen}>
             <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>
           </button>
-          <div className="counter">{busy || 'Page ' + (pageIdx + 1) + ' of ' + pages.length}</div>
+          <div className="counter">{busy || pageLabel}</div>
           <div className={'opts' + (optsOpen ? ' open' : '')}>
             <label>
               Engine
@@ -1005,14 +1192,6 @@ const PageTurnerReader = () => {
                 onChange={(e) => { const v = parseFloat(e.target.value); setRate(v); rateRef.current = v; if (playingRef.current && engineRef.current === 'browser') speakAt(unitRef.current); }}
               >
                 {['0.8', '0.9', '1', '1.15', '1.3', '1.5', '1.8'].map((v) => <option key={v} value={v}>{v}x</option>)}
-              </select>
-            </label>
-            <label>
-              Page
-              <select value={String(budget)} onChange={(e) => setBudget(parseInt(e.target.value, 10))}>
-                <option value="550">Short</option>
-                <option value="950">Medium</option>
-                <option value="1500">Long</option>
               </select>
             </label>
             <label>
