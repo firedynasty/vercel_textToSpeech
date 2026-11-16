@@ -28,6 +28,11 @@ and reading continues.
 - Two engines: the browser's `speechSynthesis` (default, prefers an Enhanced/Premium English
   voice) and OpenAI `tts-1` with a key kept in `localStorage` only.
 - Chrome drops long speech runs, so a watchdog pulses `pause()/resume()` every 10s while playing.
+- **Headphones** switch: a headset's middle button arrives as media keys via the Media Session API
+  (1× play/pause, 2× next page, 3× previous page). Remotes with only a play/pause key work too:
+  presses are counted in-app over a 450ms window. Chrome only routes media keys to a page playing
+  real audio, and `speechSynthesis` doesn't count, so a 10s near-silent WAV (`silentTrackURL`) loops
+  for as long as the switch is on. Volume +/- never reach the page.
 
 ### Library and persistence
 

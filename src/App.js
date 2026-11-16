@@ -248,6 +248,28 @@ const slugify = (s) =>
     .replace(/^-+|-+$/g, '')
     .slice(0, 60) || 'untitled';
 
+/* ============================ silent track ============================ */
+
+// A 10-second mono WAV of faint dither (±1 of 32767, about -90 dB, inaudible).
+// Not true zeros, and longer than 5 s, because Chrome only hands media keys to
+// audio it treats as real content.
+let silentURL = null;
+function silentTrackURL() {
+  if (silentURL) return silentURL;
+  const rate = 8000;
+  const samples = rate * 10;
+  const buf = new ArrayBuffer(44 + samples * 2);
+  const v = new DataView(buf);
+  const str = (o, s) => { for (let k = 0; k < s.length; k++) v.setUint8(o + k, s.charCodeAt(k)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + samples * 2, true); str(8, 'WAVE');
+  str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, samples * 2, true);
+  for (let k = 0; k < samples; k++) v.setInt16(44 + k * 2, k % 2 ? 1 : -1, true);
+  silentURL = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+  return silentURL;
+}
+
 /* ============================== storage =============================== */
 
 const IS_LOCAL = typeof window !== 'undefined' &&
@@ -340,6 +362,7 @@ const PageTurnerReader = () => {
   const [rate, setRate] = useState(() => parseFloat(lsGet('pt.rate', '1')) || 1);
   const [size, setSize] = useState(() => parseInt(lsGet('pt.size', '21'), 10) || 21);
   const [ding, setDing] = useState(() => lsGet('pt.ding', '1') !== '0');
+  const [headphones, setHeadphones] = useState(() => lsGet('pt.headphones', '') === '1');
   const [voiceURI, setVoiceURI] = useState(() => lsGet('pt.voice', ''));
   const [engine, setEngine] = useState(() => lsGet('pt.engine', 'browser'));
   const [openaiVoice, setOpenaiVoice] = useState(() => lsGet('pt.openaiVoice', 'onyx'));
@@ -808,6 +831,90 @@ const PageTurnerReader = () => {
     return () => { if (synth.removeEventListener) synth.removeEventListener('voiceschanged', load); };
   }, []);
 
+  /* ---- headphone controls ----
+     A headset's middle button arrives as a media key (once = play/pause, twice =
+     next track, three times = previous track). The browser routes those keys to
+     a page only while it is playing real audio, and speechSynthesis does not
+     count, so a near-silent track loops underneath for as long as the switch is
+     on, reading or paused. Volume +/- stay with the system; pages never see them. */
+  const hpActions = useRef({});
+  hpActions.current = {
+    playpause: () => {
+      toggle();
+      flash(playingRef.current ? 'Headphones: reading' : 'Headphones: paused');
+    },
+    // The page turn is its own feedback; a toast appears only when nothing can happen.
+    next: () => {
+      if (pageRef.current >= pagesRef.current.length - 1) { flash('Headphones: already on the last page'); return; }
+      goPage(pageRef.current + 1);
+    },
+    prev: () => {
+      if (pageRef.current <= 0) { flash('Headphones: already on the first page'); return; }
+      goPage(pageRef.current - 1);
+    },
+  };
+
+  useEffect(() => {
+    const ms = navigator.mediaSession;
+    if (!headphones || !ms) return undefined;
+    const audio = new Audio(silentTrackURL());
+    audio.loop = true;
+    const start = () => { audio.play().catch(() => { /* waits for the next click or key */ }); };
+    // Something else (another tab, the OS) may stop our track; start it again on the next interaction.
+    const kick = () => { if (audio.paused) start(); };
+    start();
+    document.addEventListener('pointerdown', kick, true);
+    document.addEventListener('keydown', kick, true);
+
+    const set = (action, fn) => { try { ms.setActionHandler(action, fn); } catch { /* unsupported action */ } };
+    // Remotes with only a play/pause button (most wired USB adapters) send that
+    // key once per press rather than translating multi-presses into next/prev
+    // track, so the presses are counted here: after a short beat, one means
+    // pause/resume, two means next page, three means previous page.
+    const tap = { n: 0, t: null };
+    const press = () => {
+      tap.n += 1;
+      clearTimeout(tap.t);
+      tap.t = setTimeout(() => {
+        const n = tap.n;
+        tap.n = 0;
+        if (n === 1) hpActions.current.playpause();
+        else if (n === 2) hpActions.current.next();
+        else hpActions.current.prev();
+      }, 450);
+    };
+    set('play', press);
+    set('pause', press);
+    // Adapters that do send next/previous track still work directly.
+    set('nexttrack', () => hpActions.current.next());
+    set('previoustrack', () => hpActions.current.prev());
+    flash('Headphone controls on: press once to pause, twice for next page, three times for back');
+
+    return () => {
+      clearTimeout(tap.t);
+      document.removeEventListener('pointerdown', kick, true);
+      document.removeEventListener('keydown', kick, true);
+      ['play', 'pause', 'nexttrack', 'previoustrack'].forEach((a) => set(a, null));
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      try { ms.metadata = null; ms.playbackState = 'none'; } catch { /* ignore */ }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headphones]);
+
+  // Tell the system what is "playing", so Now Playing shows the article and a
+  // single press means pause while reading and play while paused.
+  useEffect(() => {
+    const ms = navigator.mediaSession;
+    if (!headphones || !ms) return;
+    try {
+      if (window.MediaMetadata) ms.metadata = new window.MediaMetadata({ title: docTitle, artist: 'Page Turner' });
+      ms.playbackState = playing ? 'playing' : 'paused';
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [headphones, playing, text, docName, docs]);
+
   // Chrome stops long speech runs unless it is nudged.
   useEffect(() => {
     if (!playing || engine !== 'browser') return undefined;
@@ -926,6 +1033,7 @@ const PageTurnerReader = () => {
   useEffect(() => { lsSet('pt.rate', String(rate)); }, [rate]);
   useEffect(() => { lsSet('pt.size', String(size)); }, [size]);
   useEffect(() => { lsSet('pt.ding', ding ? '1' : '0'); }, [ding]);
+  useEffect(() => { lsSet('pt.headphones', headphones ? '1' : '0'); }, [headphones]);
   useEffect(() => { lsSet('pt.voice', voiceURI || ''); }, [voiceURI]);
   useEffect(() => { lsSet('pt.engine', engine); }, [engine]);
   useEffect(() => { lsSet('pt.openaiVoice', openaiVoice); }, [openaiVoice]);
@@ -1206,6 +1314,10 @@ const PageTurnerReader = () => {
             <label className="check">
               <input type="checkbox" checked={ding} onChange={(e) => { setDing(e.target.checked); dingRef.current = e.target.checked; }} />
               Ding
+            </label>
+            <label className="check" title="Headphone middle button: once to pause or resume, twice for the next page, three times for the previous page">
+              <input type="checkbox" checked={headphones} onChange={(e) => setHeadphones(e.target.checked)} />
+              Headphones
             </label>
           </div>
         </div>
