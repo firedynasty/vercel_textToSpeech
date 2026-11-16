@@ -1,1296 +1,1037 @@
-import React, { useState, useEffect, useRef } from 'react';
+// Page Turner — a Kindle-style read-aloud reader.
+//
+// The text is split into sentences, paginated at sentence boundaries, and read
+// aloud one sentence at a time. At the end of a page a chime sounds, the page
+// turns on its own, and reading continues. Tap any sentence to start there.
+//
+// Articles live in a library backed by Vercel Blob (/api/files), so the queue
+// you build with the Page Scraper extension follows you between devices. On
+// localhost the same library is kept in localStorage.
 
-const TextToSpeechComponent = () => {
-  const [selectedLanguage, setSelectedLanguage] = useState('en-US');
-  const [speechRate, setSpeechRate] = useState(1);
-  const [availableVoices, setAvailableVoices] = useState([]);
-  const [lastUsedVoice, setLastUsedVoice] = useState('None selected yet');
-  // State for textarea and sentences
-  const [textareaContent, setTextareaContent] = useState('');
-  const [sentences, setSentences] = useState([]);
-  const [currentSentenceIndex, setCurrentSentenceIndex] = useState(-1);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [autoAdvance, setAutoAdvance] = useState(false);
-  const autoAdvanceRef = useRef(true);
-  autoAdvanceRef.current = autoAdvance;
-  const sentencesRef = useRef([]);
-  sentencesRef.current = sentences;
-  const speakSentenceRef = useRef(null);
-  const textareaRef = useRef(null);
-  const currentSentenceIndexRef = useRef(-1);
-  currentSentenceIndexRef.current = currentSentenceIndex;
-  const [darkMode, setDarkMode] = useState(false);
-  const [fontSize, setFontSize] = useState(1.1);
-  const darkModeToggleCooldownRef = useRef(false);
-  const [interactionMode, setInteractionMode] = useState('cursive'); // 'tts', 'cursive', or 'chinese'
-  const interactionModeRef = useRef('cursive');
-  const [cursiveSpeed, setCursiveSpeed] = useState(() => parseInt(localStorage.getItem('tts-cursive-speed') ?? '3'));
-  const [cursiveSize, setCursiveSize] = useState(() => parseInt(localStorage.getItem('tts-cursive-size') ?? '52'));
-  const [showMobileMenu, setShowMobileMenu] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  interactionModeRef.current = interactionMode;
-  const cursiveOutputRef = useRef(null);
-  const cursiveTimerRef = useRef(null);
-  const hyphRef = useRef(null);
-  const [showSyllables, setShowSyllables] = useState(() => localStorage.getItem('tts-show-syllables') === 'true');
-  const sentenceRefs = useRef([]);
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import './reader.css';
 
-  // Auto-scroll to keep the active sentence visible
-  useEffect(() => {
-    if (currentSentenceIndex >= 0 && sentenceRefs.current[currentSentenceIndex]) {
-      sentenceRefs.current[currentSentenceIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-  }, [currentSentenceIndex]);
+/* ============================== text parsing ============================== */
 
-  const syllabifyText = (text) => {
-    if (!hyphRef.current) return text;
-    return text.split(/\s+/).filter(Boolean).map(w => {
-      const m = w.match(/^(\W*)(.*?)(\W*)$/);
-      if (!m) return w;
-      const [, lead, core, trail] = m;
-      if (!core) return w;
-      return lead + hyphRef.current.hyphenate(core).join('\u00B7') + trail;
-    }).join(' ');
+// A chunk ending like this is not the end of a sentence: a known abbreviation,
+// a single initial ("J."), or a bare number ("2." in "2.4%").
+const ABBR = /(?:\b(?:Mr|Mrs|Ms|Dr|St|Jr|Sr|vs|Inc|Corp|Co|Ltd|No|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec|Gov|Sen|Rep|Gen|Prof|Fig|Est|approx|U\.S|U\.K|a\.m|p\.m|e\.g|i\.e)\.|\b[A-Za-z]\.|\b\d+\.)["'’”)\]]*\s*$/;
+
+const RE_RULE = /^([=_]{3,}|-{3,})$/;
+const RE_HEAD = /^(#{1,6})\s+(.*\S)\s*$/;
+const RE_LI = /^([-*+]|\d{1,2}[.)])\s+(.*\S)\s*$/;
+const RE_QUOTE = /^>\s?(.*)$/;
+const RE_URL = /^(?:URL:\s*)?(https?:\/\/\S+)$/i;
+const RE_STAMP = /^\[\d{1,2}:\d{2}(?::\d{2})?\]$/;
+const RE_META = /^(URL|Scraped|Author|Time|Posted|Engagement|Total|Source|Canonical|Tags|Date):\s*/i;
+
+// Strip inline markdown so the voice never reads asterisks or link targets.
+function stripInline(s) {
+  return String(s || '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*\*([^*]+)\*\*\*/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1$2')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function splitSentences(text) {
+  const raw = String(text || '').trim().match(/[^.!?]+(?:[.!?]+["'’”)\]]*\s*|$)/g) || [];
+  const out = [];
+  for (const chunk of raw) {
+    // "Dr." or "U.S." is not the end of a sentence — glue it to what follows.
+    if (out.length && ABBR.test(out[out.length - 1])) out[out.length - 1] += chunk;
+    else out.push(chunk);
+  }
+  const trimmed = out.map((s) => s.trim()).filter(Boolean);
+  return trimmed.length ? trimmed : (String(text || '').trim() ? [String(text).trim()] : []);
+}
+
+// Turn scraped text into renderable items. Line 1 is the title, an optional URL
+// line follows, then markdown-ish blocks: ## headings, - lists, > quotes,
+// [0:01:23] timestamps and "Author:" lines (shown but not spoken).
+function parseDoc(raw) {
+  const lines = String(raw || '').replace(/\r/g, '').split('\n');
+  const items = [];
+  let buf = [];
+
+  const flushPara = () => {
+    if (!buf.length) return;
+    const text = stripInline(buf.join(' '));
+    buf = [];
+    if (text) items.push({ type: 'p', sents: splitSentences(text) });
   };
+  const spoken = (type, text, extra) => ({ type, text, sents: splitSentences(text), ...extra });
 
-  // Chinese (Hanzi Writer) mode state
-  const [hanziChars, setHanziChars] = useState([]);
-  const [hanziActiveIdx, setHanziActiveIdx] = useState(0);
-  const [hanziSpeed, setHanziSpeed] = useState(() => parseFloat(localStorage.getItem('tts-hanzi-speed') || '1'));
-  const hanziTargetRef = useRef(null);
-  const hanziWriterRef = useRef(null);
-  const hanziCharsRef = useRef([]);
-  hanziCharsRef.current = hanziChars;
-  const hanziActiveIdxRef = useRef(0);
-  hanziActiveIdxRef.current = hanziActiveIdx;
-  const hanziSpeedRef = useRef(1);
-  hanziSpeedRef.current = hanziSpeed;
-  const [ttsEngine, setTtsEngine] = useState(() => localStorage.getItem('appTtsEngine') || 'browser');
-  const [openaiVoice, setOpenaiVoice] = useState(() => localStorage.getItem('appOpenaiVoice') || 'onyx');
-  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
-  const [apiKeyValue, setApiKeyValue] = useState(() => {
-    const key = localStorage.getItem('OPENAI_API_KEY') || '';
-    return key ? '••••' + key.slice(-4) : '';
+  let i = 0;
+  while (i < lines.length && !lines[i].trim()) i++;
+  if (i < lines.length) {
+    const first = stripInline(lines[i].trim().replace(/^#{1,6}\s+/, ''));
+    if (first) items.push(spoken('title', first));
+    i++;
+  }
+  // An immediately following bare URL is the source line.
+  let j = i;
+  while (j < lines.length && !lines[j].trim()) j++;
+  if (j < lines.length) {
+    const m = lines[j].trim().match(RE_URL);
+    if (m) { items.push({ type: 'source', text: m[1] }); i = j + 1; }
+  }
+
+  for (; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) { flushPara(); continue; }
+
+    if (RE_RULE.test(line)) { flushPara(); items.push({ type: 'rule' }); continue; }
+    if (RE_STAMP.test(line) || RE_META.test(line)) { flushPara(); items.push({ type: 'label', text: line }); continue; }
+
+    const h = line.match(RE_HEAD);
+    if (h) { flushPara(); items.push(spoken('head', stripInline(h[2]), { level: Math.min(h[1].length, 2) })); continue; }
+
+    const q = line.match(RE_QUOTE);
+    if (q) { flushPara(); const t = stripInline(q[1]); if (t) items.push(spoken('quote', t)); continue; }
+
+    const li = line.match(RE_LI);
+    if (li) { flushPara(); const t = stripInline(li[2]); if (t) items.push(spoken('li', t)); continue; }
+
+    // Short all-caps lines are section markers in the X/Twitter scrapes.
+    if (line.length <= 48 && !/[.!?]$/.test(line) && line === line.toUpperCase() && /[A-Z]{3}/.test(line)) {
+      flushPara(); items.push(spoken('head', stripInline(line), { level: 2 })); continue;
+    }
+
+    buf.push(line);
+  }
+  flushPara();
+  return items;
+}
+
+const SPOKEN = { title: true, head: true, p: true, li: true, quote: true };
+
+// Break items into pages at sentence boundaries so the voice never stops mid-thought.
+function paginate(items, budget) {
+  const pages = [];
+  let page = [];
+  let used = 0;
+  const flushPage = () => { if (page.length) pages.push(page); page = []; used = 0; };
+
+  for (const it of items) {
+    if (it.type === 'title') { page.push(it); used += it.text.length * 1.6 + 40; continue; }
+    if (it.type === 'source' || it.type === 'label' || it.type === 'rule') {
+      page.push(it); used += 30; continue;
+    }
+    if (it.type === 'head') {
+      if (used > budget * 0.6) flushPage();
+      page.push(it); used += it.text.length + 70; continue;
+    }
+    if (it.type === 'li' || it.type === 'quote') {
+      if (used >= budget) flushPage();
+      page.push(it); used += it.text.length + 20; continue;
+    }
+    let chunk = { type: 'p', sents: [], cont: false };
+    page.push(chunk);
+    for (const s of it.sents) {
+      chunk.sents.push(s);
+      used += s.length + 1;
+      if (used >= budget) {
+        flushPage();
+        chunk = { type: 'p', sents: [], cont: true };
+        page.push(chunk);
+      }
+    }
+    if (!chunk.sents.length) page.pop();
+  }
+  flushPage();
+
+  const out = pages.map((list) => ({ items: list }));
+  // Never leave a heading stranded as the last thing on a page.
+  for (let k = 0; k < out.length - 1; k++) {
+    const last = out[k].items[out[k].items.length - 1];
+    if (last && last.type === 'head' && out[k].items.length > 1) {
+      out[k].items.pop();
+      out[k + 1].items.unshift(last);
+    }
+  }
+  return out.length ? out : [{ items: [{ type: 'p', sents: ['Nothing to read yet. Open the library or paste some text.'] }] }];
+}
+
+// The flat list of spoken sentences on a page, in reading order.
+function unitsOf(page) {
+  const out = [];
+  (page ? page.items : []).forEach((it, idx) => {
+    if (!SPOKEN[it.type] || !it.sents) return;
+    it.sents.forEach((text, k) => out.push({ text, item: idx, sent: k }));
   });
-  const ttsEngineRef = useRef('browser');
-  ttsEngineRef.current = ttsEngine;
-  const openaiVoiceRef = useRef('onyx');
-  openaiVoiceRef.current = openaiVoice;
-  const currentAudioRef = useRef(null);
+  return out;
+}
 
-  // Speak whatever is currently in the cursive output area
-  const speakCursiveOutput = () => {
-    if (!cursiveOutputRef.current) return;
-    // Get plain text from the cursive output, stripping syllable dots
-    const text = cursiveOutputRef.current.textContent.replace(/\u00B7/g, '').trim();
-    if (!text) return;
+const titleOf = (text) => {
+  const line = String(text || '').split('\n').find((l) => l.trim());
+  return stripInline((line || '').replace(/^#{1,6}\s+/, '')).slice(0, 110) || 'Untitled';
+};
 
-    // Stop any current speech
-    speechSynthesis.cancel();
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current = null;
-    }
+const slugify = (s) =>
+  String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'untitled';
 
-    const apiKey = (localStorage.getItem('OPENAI_API_KEY') || '').trim();
-    if (apiKey) {
-      speakWithOpenAI(text);
-    } else {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = selectedLanguage;
-      utterance.rate = speechRate;
-      speechSynthesis.speak(utterance);
-    }
-  };
+/* ============================== storage =============================== */
 
-  // Track mobile viewport
-  useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+const IS_LOCAL = typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const ACCESS_CODE = IS_LOCAL ? 'localhost' : '123';
+const POS_FILE = 'reading-positions.json';
 
-  // Load cursive font
-  useEffect(() => {
-    if (!document.getElementById('cursive-font-link')) {
-      const link = document.createElement('link');
-      link.id = 'cursive-font-link';
-      link.rel = 'stylesheet';
-      link.href = 'https://fonts.googleapis.com/css2?family=Alex+Brush&display=swap';
-      document.head.appendChild(link);
-    }
-  }, []);
+const lsGet = (k, fallback) => {
+  try { const v = localStorage.getItem(k); return v === null ? fallback : v; } catch { return fallback; }
+};
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
+const lsJSON = (k, fallback) => { try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; } };
 
-  // Load Hypher for syllable hyphenation
-  useEffect(() => {
-    if (!hyphRef.current) {
-      Promise.all([
-        import(/* webpackIgnore: true */ 'https://esm.sh/hypher'),
-        import(/* webpackIgnore: true */ 'https://esm.sh/hyphenation.en-us')
-      ]).then(([HypherMod, enMod]) => {
-        const Hypher = HypherMod.default || HypherMod;
-        const english = enMod.default || enMod;
-        hyphRef.current = new Hypher(english);
-      }).catch(err => console.warn('Failed to load Hypher:', err));
-    }
-  }, []);
+const localStore = {
+  async list() {
+    return lsJSON('pt.lib', []);
+  },
+  async get(name) {
+    return lsGet('pt.doc.' + name, '');
+  },
+  async put(name, content) {
+    lsSet('pt.doc.' + name, content);
+    const lib = lsJSON('pt.lib', []).filter((d) => d.name !== name);
+    lib.unshift({ name, title: titleOf(content), chars: content.length, updatedAt: new Date().toISOString() });
+    lsSet('pt.lib', JSON.stringify(lib));
+    return true;
+  },
+  async del(name) {
+    try { localStorage.removeItem('pt.doc.' + name); } catch { /* ignore */ }
+    lsSet('pt.lib', JSON.stringify(lsJSON('pt.lib', []).filter((d) => d.name !== name)));
+    return true;
+  },
+};
 
-  // Load Hanzi Writer library
-  useEffect(() => {
-    if (!document.getElementById('hanzi-writer-script')) {
-      const script = document.createElement('script');
-      script.id = 'hanzi-writer-script';
-      script.src = 'https://cdn.jsdelivr.net/npm/hanzi-writer@3.7/dist/hanzi-writer.min.js';
-      document.head.appendChild(script);
-    }
-  }, []);
-
-  // Parse Chinese characters from text
-  const parseHanziChars = (text) => {
-    return [...(text || '')].filter(ch => {
-      const c = ch.codePointAt(0);
-      return (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF) || (c >= 0x20000 && c <= 0x2A6DF);
+const blobStore = {
+  async list() {
+    const r = await fetch('/api/files?meta=1');
+    if (!r.ok) throw new Error('List failed (' + r.status + ')');
+    const data = await r.json();
+    return (data.files || [])
+      .filter((f) => f.name !== POS_FILE)
+      .map((f) => ({ name: f.name, title: f.title || f.name.replace(/\.txt$/, ''), chars: f.size || 0, updatedAt: f.uploadedAt }));
+  },
+  async get(name) {
+    const r = await fetch('/api/files?filename=' + encodeURIComponent(name));
+    if (!r.ok) throw new Error('Load failed (' + r.status + ')');
+    const data = await r.json();
+    return data.content || '';
+  },
+  async put(name, content) {
+    const r = await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: name, content, accessCode: ACCESS_CODE }),
     });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Save failed');
+    return true;
+  },
+  async del(name) {
+    const r = await fetch('/api/files?filename=' + encodeURIComponent(name), {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accessCode: ACCESS_CODE }),
+    });
+    if (!r.ok) throw new Error('Delete failed');
+    return true;
+  },
+};
+
+const store = IS_LOCAL ? localStore : blobStore;
+
+/* ============================== sample text ============================== */
+
+const SAMPLE = [
+  'Page Turner',
+  '## How this reader works',
+  'Press play and the reader speaks one sentence at a time, highlighting as it goes. At the end of a page a chime sounds, the page turns on its own, and reading carries on — the same rhythm as the Kindle Paperwhite read-aloud.',
+  'Tap any sentence to start from that spot. The space bar pauses and resumes, the left and right arrows turn pages, and the up and down arrows step one sentence at a time.',
+  '## Getting text in',
+  'Press Alt+Shift+S on any article with the Page Scraper extension and the page lands on your clipboard as a title, a URL, and clean paragraphs. Press Paste, then Read and save, and it is ready.',
+  'Saving an article puts it in the library on Vercel Blob, so the queue you build on the laptop is waiting on the phone. Your place in each article is remembered too.',
+  'Everything else, including the macOS speak clipboard app, stays as it was. This page is only the long-form reader.',
+].join('\n\n');
+
+/* ============================== component ============================== */
+
+const PageTurnerReader = () => {
+  /* ---- settings (persisted) ---- */
+  const [dark, setDark] = useState(() => lsGet('pt.dark', '') === '1');
+  const [rate, setRate] = useState(() => parseFloat(lsGet('pt.rate', '1')) || 1);
+  const [budget, setBudget] = useState(() => parseInt(lsGet('pt.budget', '950'), 10) || 950);
+  const [size, setSize] = useState(() => parseInt(lsGet('pt.size', '21'), 10) || 21);
+  const [ding, setDing] = useState(() => lsGet('pt.ding', '1') !== '0');
+  const [voiceURI, setVoiceURI] = useState(() => lsGet('pt.voice', ''));
+  const [engine, setEngine] = useState(() => lsGet('pt.engine', 'browser'));
+  const [openaiVoice, setOpenaiVoice] = useState(() => lsGet('pt.openaiVoice', 'onyx'));
+
+  /* ---- document + library ---- */
+  const [text, setText] = useState(() => lsGet('pt.text', '') || SAMPLE);
+  const [docName, setDocName] = useState(() => lsGet('pt.docName', '') || null);
+  const [docs, setDocs] = useState([]);
+  const [libOpen, setLibOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [optsOpen, setOptsOpen] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [toast, setToast] = useState('');
+
+  /* ---- playback ---- */
+  const [pageIdx, setPageIdx] = useState(0);
+  const [unitIdx, setUnitIdx] = useState(-1);
+  const [playing, setPlaying] = useState(false);
+  const [leaving, setLeaving] = useState(null);
+  const [voices, setVoices] = useState([]);
+
+  const stageRef = useRef(null);
+  const sheetRef = useRef(null);
+  const genRef = useRef(0);
+  const timerRef = useRef(null);
+  const actxRef = useRef(null);
+  const audioRef = useRef(null);
+  const speakAtRef = useRef(null);
+  const toastTimer = useRef(null);
+  const posTimer = useRef(null);
+  const restoredRef = useRef(false);
+
+  const pages = useMemo(() => paginate(parseDoc(text), budget), [text, budget]);
+
+  // Refs mirror state so speech callbacks never read a stale closure.
+  const pagesRef = useRef(pages); pagesRef.current = pages;
+  const pageRef = useRef(0);
+  const unitRef = useRef(-1);
+  const playingRef = useRef(false);
+  const rateRef = useRef(rate); rateRef.current = rate;
+  const voiceRef = useRef(voiceURI); voiceRef.current = voiceURI;
+  const voicesRef = useRef(voices); voicesRef.current = voices;
+  const dingRef = useRef(ding); dingRef.current = ding;
+  const engineRef = useRef(engine); engineRef.current = engine;
+  const openaiVoiceRef = useRef(openaiVoice); openaiVoiceRef.current = openaiVoice;
+  const docNameRef = useRef(docName); docNameRef.current = docName;
+
+  const unitsAt = (p) => unitsOf(pagesRef.current[p]);
+
+  const flash = (msg) => {
+    setToast(msg);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(''), 2600);
   };
 
-  // Build a HanziWriter instance for a given character
-  const buildHanziWriter = (ch, autoAnimate) => {
-    if (typeof window.HanziWriter === 'undefined') {
-      setTimeout(() => buildHanziWriter(ch, autoAnimate), 150);
-      return;
-    }
-    const target = hanziTargetRef.current;
-    if (!target) return;
-    target.innerHTML = '';
+  /* ---------------------------- persistence ---------------------------- */
+
+  const savePosition = (page, unit) => {
+    const name = docNameRef.current;
+    if (!name) { lsSet('pt.scratchPos', JSON.stringify({ page, unit })); return; }
+    const map = lsJSON('pt.pos', {});
+    map[name] = { page, unit, at: Date.now() };
+    lsSet('pt.pos', JSON.stringify(map));
+    if (IS_LOCAL) return;
+    clearTimeout(posTimer.current);
+    posTimer.current = setTimeout(() => { syncPositions().catch(() => {}); }, 5000);
+  };
+
+  // Merge this device's positions with whatever another device last wrote.
+  const syncPositions = async () => {
+    const mine = lsJSON('pt.pos', {});
+    let theirs = {};
     try {
-      const writer = window.HanziWriter.create(target, ch, {
-        width: 280,
-        height: 280,
-        padding: 12,
-        showOutline: true,
-        showCharacter: false,
-        strokeAnimationSpeed: hanziSpeedRef.current,
-        delayBetweenStrokes: 220,
-        strokeColor: '#1a1209',
-        outlineColor: '#d8cfbb',
-        radicalColor: '#8b4513',
-        drawingColor: '#185FA5',
-        highlightColor: '#0F6E56',
-        onLoadCharDataSuccess: () => {
-          if (autoAnimate) {
-            writer.animateCharacter({
-              onComplete: () => {
-                // Auto-advance to next character
-                const nextIdx = hanziActiveIdxRef.current + 1;
-                if (nextIdx < hanziCharsRef.current.length) {
-                  setHanziActiveIdx(nextIdx);
-                  setTimeout(() => buildHanziWriter(hanziCharsRef.current[nextIdx], true), 400);
-                }
-              }
-            });
-          }
-        },
-      });
-      hanziWriterRef.current = writer;
+      const r = await fetch('/api/files?filename=' + encodeURIComponent(POS_FILE));
+      if (r.ok) theirs = JSON.parse((await r.json()).content || '{}') || {};
+    } catch { /* first run, or offline */ }
+    const merged = { ...theirs };
+    for (const [k, v] of Object.entries(mine)) {
+      if (!merged[k] || (v.at || 0) > (merged[k].at || 0)) merged[k] = v;
+    }
+    lsSet('pt.pos', JSON.stringify(merged));
+    await fetch('/api/files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: POS_FILE, content: JSON.stringify(merged), accessCode: ACCESS_CODE }),
+    });
+    return merged;
+  };
+
+  const positionFor = (name) => {
+    if (!name) return lsJSON('pt.scratchPos', { page: 0, unit: 0 });
+    return lsJSON('pt.pos', {})[name] || { page: 0, unit: 0 };
+  };
+
+  const refreshLibrary = async () => {
+    try {
+      const list = await store.list();
+      list.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+      setDocs(list);
+      return list;
     } catch (e) {
-      console.error('HanziWriter error:', e);
+      console.error('Library error:', e);
+      flash('Could not reach the library');
+      return [];
     }
   };
 
-  // Start animating a sentence's Chinese characters one by one
-  const animateHanziSentence = (text) => {
-    const chars = parseHanziChars(text);
-    if (chars.length === 0) return;
-    setHanziChars(chars);
-    setHanziActiveIdx(0);
-    // Small delay to let React render the target div
-    setTimeout(() => buildHanziWriter(chars[0], true), 50);
+  /* ------------------------------- audio ------------------------------- */
+
+  const ensureAudio = () => {
+    try {
+      if (!actxRef.current) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (Ctx) actxRef.current = new Ctx();
+      }
+      if (actxRef.current && actxRef.current.state === 'suspended') actxRef.current.resume();
+    } catch { actxRef.current = null; }
   };
 
-  // Animate text in cursive style
-  const animateCursive = (text) => {
-    if (!cursiveOutputRef.current || !text) return;
-    // Stop any existing animation
-    if (cursiveTimerRef.current) { clearTimeout(cursiveTimerRef.current); cursiveTimerRef.current = null; }
-
-    const outputEl = cursiveOutputRef.current;
-    outputEl.innerHTML = '';
-    outputEl.scrollTop = 0;
-
-    const fadeMs = [700, 500, 350, 220, 120][cursiveSpeed - 1];
-    const delayMs = [600, 420, 280, 170, 90][cursiveSpeed - 1];
-
-    const syllabifyWord = (w) => {
-      if (!hyphRef.current) return w;
-      const m = w.match(/^(\W*)(.*?)(\W*)$/);
-      if (!m) return w;
-      const [, lead, core, trail] = m;
-      if (!core) return w;
-      return lead + hyphRef.current.hyphenate(core).join('\u00B7') + trail;
-    };
-
-    const words = text.split(/\s+/).filter(Boolean);
-    const spans = words.map((word, i) => {
-      const sp = document.createElement('span');
-      sp.style.cssText = `display:inline;opacity:0;transition:opacity ${fadeMs}ms ease`;
-      const display = syllabifyWord(word);
-      sp.textContent = i < words.length - 1 ? display + ' ' : display;
-      outputEl.appendChild(sp);
-      return sp;
+  // Two-tone page-turn chime. Returns how long to wait before turning.
+  const chime = () => {
+    const ctx = actxRef.current;
+    if (!dingRef.current || !ctx) return 320;
+    const t = ctx.currentTime;
+    [[880, 0], [1318.5, 0.16]].forEach(([freq, at]) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t + at);
+      gain.gain.exponentialRampToValueAtTime(0.22, t + at + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.9);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t + at);
+      osc.stop(t + at + 1);
     });
-
-    let i = 0;
-    function next() {
-      if (i >= spans.length) { cursiveTimerRef.current = null; return; }
-      spans[i].style.opacity = '1';
-      outputEl.scrollTo({ top: outputEl.scrollHeight, behavior: 'smooth' });
-      i++;
-      cursiveTimerRef.current = setTimeout(next, delayMs);
-    }
-    next();
+    return 1100;
   };
 
-  // Check if running on localhost
-  const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-
-  // Auto-load on mount
-  useEffect(() => {
-    loadFromBlob();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Load available voices when component mounts
-  useEffect(() => {
-    const loadVoices = () => {
-      const voices = speechSynthesis.getVoices();
-      setAvailableVoices(voices);
-      console.log("Available voices:", voices.map(v => `${v.name} (${v.lang})`).join(', '));
-    };
-
-    // Load voices immediately if available
-    loadVoices();
-
-    // Also listen for voiceschanged event
-    speechSynthesis.addEventListener('voiceschanged', loadVoices);
-
-    return () => {
-      speechSynthesis.removeEventListener('voiceschanged', loadVoices);
-    };
-  }, []);
-
-  // Keyboard shortcuts: Escape pastes from clipboard, ArrowRight advances sentence
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        handlePasteFromClipboard();
-      }
-      if (e.key === 'ArrowRight') {
-        const nextIndex = currentSentenceIndexRef.current + 1;
-        if (nextIndex < sentencesRef.current.length) {
-          setCurrentSentenceIndex(nextIndex);
-          const sentence = sentencesRef.current[nextIndex];
-          if (interactionModeRef.current === 'chinese') {
-            animateHanziSentence(sentence);
-          } else {
-            animateCursive(sentence);
-          }
-        }
-      }
-      if (e.key === 'ArrowLeft') {
-        const prevIndex = currentSentenceIndexRef.current - 1;
-        if (prevIndex >= 0) {
-          setCurrentSentenceIndex(prevIndex);
-          const sentence = sentencesRef.current[prevIndex];
-          if (interactionModeRef.current === 'chinese') {
-            animateHanziSentence(sentence);
-          } else {
-            animateCursive(sentence);
-          }
-        }
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Load content from cloud or localStorage
-  const loadFromBlob = async () => {
-    setIsLoading(true);
-    try {
-      if (isLocalhost) {
-        const stored = localStorage.getItem('tts-content');
-        if (stored) {
-          setTextareaContent(stored);
-          processTextIntoSentences(stored);
-        }
-      } else {
-        const response = await fetch('/api/files');
-        if (response.ok) {
-          const data = await response.json();
-          const content = (data.files || {})['content.txt'];
-          if (content) {
-            setTextareaContent(content);
-            processTextIntoSentences(content);
-          }
-        }
-      }
-    } catch (err) {
-      console.error('Load error:', err);
-    } finally {
-      setIsLoading(false);
-    }
+  const stopSound = () => {
+    try { window.speechSynthesis.cancel(); } catch { /* unsupported */ }
+    if (audioRef.current) { try { audioRef.current.pause(); } catch { /* ignore */ } audioRef.current = null; }
+    clearTimeout(timerRef.current);
   };
 
-  // Save content to cloud or localStorage
-  const saveToBlob = async () => {
-    setIsSaving(true);
-    try {
-      if (isLocalhost) {
-        localStorage.setItem('tts-content', textareaContent);
-        alert('Saved locally!');
-      } else {
-        const response = await fetch('/api/files', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            filename: 'content.txt',
-            content: textareaContent,
-            accessCode: '123',
-          }),
-        });
+  const pickVoice = () => voicesRef.current.find((v) => v.voiceURI === voiceRef.current) || null;
 
-        if (response.ok) {
-          alert('Saved to cloud!');
-        } else {
-          const data = await response.json();
-          alert('Error saving: ' + (data.error || 'Unknown error'));
-        }
-      }
-    } catch (err) {
-      console.error('Save error:', err);
-      alert('Error saving');
-    } finally {
-      setIsSaving(false);
-    }
+  const pause = () => {
+    playingRef.current = false;
+    setPlaying(false);
+    genRef.current++;
+    stopSound();
   };
 
-  // Strip markdown formatting from pasted text
-  const stripMarkdown = (text) => {
-    return text
-      .replace(/^#{1,6}\s+/gm, '')        // headers: ## Heading
-      .replace(/^>\s?/gm, '')              // blockquotes: > text
-      .replace(/^---+$/gm, '')             // horizontal rules: ---
-      .replace(/\*\*\*(.+?)\*\*\*/g, '$1') // bold+italic: ***text***
-      .replace(/\*\*(.+?)\*\*/g, '$1')    // bold: **text**
-      .replace(/\*(.+?)\*/g, '$1')        // italic: *text*
-      .replace(/^[-*+]\s+/gm, '')         // unordered list items: - item
-      .replace(/^\d+\.\s+/gm, '')         // ordered list items: 1. item
-      .replace(/`{3}[\s\S]*?`{3}/g, '')   // code blocks: ```...```
-      .replace(/`(.+?)`/g, '$1')          // inline code: `code`
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links: [text](url)
-      .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1') // images: ![alt](url)
-      .replace(/\n{3,}/g, '\n\n');         // collapse excessive newlines
-  };
-
-  // Process textarea text into sentences
-  const processTextIntoSentences = (text) => {
-    if (!text || !text.trim()) {
-      setSentences([]);
-      return;
-    }
-
-    // Split by sentence endings (., !, ?) and newlines
-    const allRawSentences = text.split(/[.!?\n]+/).filter(sentence => sentence.trim().length > 0);
-
-    // Consolidate short sentences (< 15 characters)
-    const consolidatedSentences = [];
-    for (let i = 0; i < allRawSentences.length; i++) {
-      const currentSentence = allRawSentences[i].trim();
-      if (!currentSentence) continue;
-
-      const charLength = currentSentence.length;
-
-      // If sentence is very short, merge with previous or next
-      if (charLength < 15 && consolidatedSentences.length > 0) {
-        const lastIndex = consolidatedSentences.length - 1;
-        consolidatedSentences[lastIndex] = consolidatedSentences[lastIndex] + '. ' + currentSentence;
-      } else if (charLength < 15 && i < allRawSentences.length - 1) {
-        const nextSentence = allRawSentences[i + 1].trim();
-        if (nextSentence) {
-          consolidatedSentences.push(currentSentence + '. ' + nextSentence);
-          i++;
-        } else {
-          consolidatedSentences.push(currentSentence);
-        }
-      } else {
-        consolidatedSentences.push(currentSentence);
-      }
-    }
-
-    setSentences(consolidatedSentences);
-    setCurrentSentenceIndex(-1);
-  };
-
-  // Paste from clipboard
-  const handlePasteFromClipboard = async ({ startReading = false } = {}) => {
-    try {
-      const raw = await navigator.clipboard.readText();
-      const text = stripMarkdown(raw);
-      setTextareaContent(text);
-      processTextIntoSentences(text);
-      // Scroll back up to the textarea
-      if (textareaRef.current) {
-        textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-      // Start reading from the first sentence if requested
-      if (startReading && text && text.trim()) {
-        const newSentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
-        if (newSentences.length > 0) {
-          setTimeout(() => {
-            speakSentenceRef.current(sentencesRef.current[0], 0);
-          }, 100);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to read clipboard:', err);
-      alert('Failed to read from clipboard. Please paste manually or check permissions.');
-    }
-  };
-
-  // Append clipboard to existing textarea content
-  const handleAppendFromClipboard = async () => {
-    try {
-      const raw = await navigator.clipboard.readText();
-      const text = stripMarkdown(raw);
-      const combined = textareaContent + (textareaContent ? '\n' : '') + text;
-      setTextareaContent(combined);
-      processTextIntoSentences(combined);
-    } catch (err) {
-      console.error('Failed to read clipboard:', err);
-      alert('Failed to read from clipboard. Please paste manually or check permissions.');
-    }
-  };
-
-  // Handle textarea change
-  const handleTextareaChange = (e) => {
-    const text = e.target.value;
-    setTextareaContent(text);
-    processTextIntoSentences(text);
-  };
-
-  // Handle paste in textarea - auto-start reading, strip markdown
-  const handleTextareaPaste = (e) => {
-    const pastedText = e.clipboardData.getData('text');
-    if (pastedText && pastedText.trim()) {
-      e.preventDefault();
-      const cleaned = stripMarkdown(pastedText);
-      const newText = textareaContent
-        ? textareaContent.substring(0, e.target.selectionStart) + cleaned + textareaContent.substring(e.target.selectionEnd)
-        : cleaned;
-      setTextareaContent(newText);
-      processTextIntoSentences(newText);
-    }
-  };
-
-  // Toggle dark mode with 1000ms cooldown
-  const handleDarkModeToggle = () => {
-    if (darkModeToggleCooldownRef.current) return;
-    darkModeToggleCooldownRef.current = true;
-    setDarkMode(prev => !prev);
-    setTimeout(() => { darkModeToggleCooldownRef.current = false; }, 1000);
-  };
-
-  // Theme colors
-  const theme = darkMode ? {
-    bg: '#1a1a2e', text: '#e0e0e0', textSecondary: '#999',
-    border: '#333', inputBg: '#16213e', inputBorder: '#444',
-    cardBg: '#16213e', cardBorder: '#333',
-    sectionBg: '#0f3460', sectionBorder: '#1a5276',
-    highlight: '#e6a817', sidebarBg: '#2a2a4a', sidebarBorder: '#444',
-    navbarBg: '#2a2a4a', heading: '#7ec8e3',
-    btnPaste: '#059669', btnAppend: '#d97706',
-  } : {
-    bg: '#ffffff', text: '#000000', textSecondary: '#666',
-    border: '#ccc', inputBg: '#ffffff', inputBorder: '#ccc',
-    cardBg: '#f8f9fa', cardBorder: '#dee2e6',
-    sectionBg: '#f0f9ff', sectionBorder: '#3B82F6',
-    highlight: '#ffd43b', sidebarBg: '#e0e0e0', sidebarBorder: '#ccc',
-    navbarBg: autoAdvance ? '#e6ffe6' : '#f0f0f0', heading: '#1e40af',
-    btnPaste: '#10B981', btnAppend: '#F59E0B',
-  };
-
-  // Speak text using OpenAI TTS API
-  const speakWithOpenAI = (text, { onEnd, onError } = {}) => {
-    const apiKey = localStorage.getItem('OPENAI_API_KEY') || '';
-    if (!apiKey) {
-      console.warn('OPENAI_API_KEY not found in localStorage');
-      if (onError) onError(new Error('No API key'));
-      return;
-    }
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current = null;
-    }
+  const speakOpenAI = (sentence, gen, onDone) => {
+    const key = (lsGet('OPENAI_API_KEY', '') || '').trim();
+    if (!key) { flash('Add an OpenAI key, or switch the engine back to Browser'); pause(); return; }
     (async () => {
       try {
         const resp = await fetch('https://api.openai.com/v1/audio/speech', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
-          body: JSON.stringify({ model: 'tts-1', input: text, voice: openaiVoiceRef.current, speed: 1.0 })
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+          body: JSON.stringify({ model: 'tts-1', input: sentence, voice: openaiVoiceRef.current, speed: rateRef.current }),
         });
-        if (!resp.ok) {
-          console.error('OpenAI TTS error:', resp.status, await resp.text());
-          if (onError) onError(new Error('OpenAI error ' + resp.status));
-          return;
-        }
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
+        if (!resp.ok) throw new Error('OpenAI ' + resp.status);
+        if (gen !== genRef.current || !playingRef.current) return;
+        const url = URL.createObjectURL(await resp.blob());
         const audio = new Audio(url);
-        currentAudioRef.current = audio;
-        audio.onended = () => {
-          URL.revokeObjectURL(url);
-          currentAudioRef.current = null;
-          if (onEnd) onEnd();
-        };
-        audio.onerror = (e) => {
-          URL.revokeObjectURL(url);
-          currentAudioRef.current = null;
-          if (onError) onError(e);
-        };
+        audioRef.current = audio;
+        audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; onDone(); };
+        audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; onDone(); };
         audio.play();
-      } catch (err) {
-        console.error('OpenAI TTS fetch error:', err);
-        if (onError) onError(err);
+      } catch (e) {
+        console.error('OpenAI TTS:', e);
+        if (gen === genRef.current) {
+          flash('OpenAI speech failed — switching to the browser voice');
+          setEngine('browser');
+          engineRef.current = 'browser';
+          onDone();
+        }
       }
     })();
   };
 
-  // Speak a sentence
-  const speakSentence = (sentenceText, index) => {
-    if (!sentenceText) return;
-
-    console.log(`[speakSentence] called with index=${index}, text="${sentenceText.substring(0, 50)}..."`);
-
-    // Cancel any current/queued speech immediately
-    speechSynthesis.cancel();
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current = null;
-    }
-
-    setCurrentSentenceIndex(index);
-    console.log(`[speakSentence] setCurrentSentenceIndex(${index})`);
-
-    // === OpenAI TTS ===
-    if (ttsEngineRef.current === 'openai') {
-      speakWithOpenAI(sentenceText, {
-        onEnd: () => {
-          console.log(`[onend openai] finished index=${index}, autoAdvance=${autoAdvanceRef.current}`);
-          if (autoAdvanceRef.current) {
-            const nextIndex = index + 1;
-            if (nextIndex < sentencesRef.current.length) {
-              setTimeout(() => {
-                speakSentenceRef.current(sentencesRef.current[nextIndex], nextIndex);
-              }, 300);
-            }
-          }
-        },
-        onError: (e) => console.error('OpenAI TTS error:', e)
-      });
-      return;
-    }
-
-    // === Browser TTS ===
-    const utterance = new SpeechSynthesisUtterance(sentenceText);
-    utterance.lang = selectedLanguage;
-    utterance.rate = speechRate;
-
-    const voices = availableVoices;
-
-    // Use the same voice selection logic as speakText
-    if (selectedLanguage.includes('en-')) {
-      let englishVoice = voices.find(voice =>
-        (voice.lang.includes('en-') && voice.name.includes('Enhanced')) ||
-        (voice.lang.includes('en-') && voice.name.includes('Premium'))
-      );
-
-      if (!englishVoice) {
-        englishVoice = voices.find(voice =>
-          voice.lang.includes('en-') && voice.name.includes('Google')
-        );
+  const finishPage = (gen) => {
+    if (gen !== genRef.current || !playingRef.current) return;
+    unitRef.current = -1;
+    setUnitIdx(-1);
+    const wait = chime();
+    timerRef.current = setTimeout(() => {
+      if (gen !== genRef.current || !playingRef.current) return;
+      if (pageRef.current < pagesRef.current.length - 1) {
+        turnTo(pageRef.current + 1, false, () => { if (playingRef.current) speakAtRef.current(0); });
+      } else {
+        playingRef.current = false;
+        setPlaying(false);
+        unitRef.current = -1;
+        setUnitIdx(-1);
+        flash('End of the article');
       }
+    }, wait);
+  };
 
-      if (!englishVoice) {
-        const qualityVoiceNames = ['Daniel', 'Samantha', 'Alex', 'Karen', 'Microsoft David'];
-        for (const name of qualityVoiceNames) {
-          const foundVoice = voices.find(voice =>
-            voice.lang.includes('en-') && voice.name.includes(name)
-          );
-          if (foundVoice) {
-            englishVoice = foundVoice;
-            break;
-          }
-        }
-      }
+  const speakAt = (i) => {
+    const gen = ++genRef.current;
+    stopSound();
+    const list = unitsAt(pageRef.current);
+    if (i >= list.length) { finishPage(gen); return; }
+    const safe = Math.max(0, i);
+    unitRef.current = safe;
+    setUnitIdx(safe);
+    savePosition(pageRef.current, safe);
 
-      if (!englishVoice) {
-        englishVoice = voices.find(voice => voice.lang.includes('en-'));
-      }
-
-      if (englishVoice) {
-        setLastUsedVoice(`${englishVoice.name} (${englishVoice.lang})`);
-        utterance.voice = englishVoice;
-      }
-    } else if ((selectedLanguage === 'zh-CN' || selectedLanguage === 'zh-HK')) {
-      if (selectedLanguage === 'zh-CN') {
-        let chineseVoice;
-        const blacklistedVoices = ['Eddy', 'Flo', 'Grandma', 'Grandpa'];
-
-        chineseVoice = voices.find(voice =>
-          voice.name.includes('Google') && voice.lang.includes('zh-CN') &&
-          !blacklistedVoices.some(bad => voice.name.includes(bad)));
-
-        if (!chineseVoice) {
-          chineseVoice = voices.find(voice =>
-            voice.lang.includes('zh-CN') &&
-            (voice.name.includes('Enhanced') || voice.name.includes('Premium')) &&
-            !blacklistedVoices.some(bad => voice.name.includes(bad)));
-        }
-
-        if (!chineseVoice) {
-          const goodMandarinNames = ['Li-Mu', 'Ting-Ting', 'Sin-ji', 'Mei-Jia', 'Yaoyao', 'Kangkang', 'Huihui'];
-          for (const name of goodMandarinNames) {
-            const foundVoice = voices.find(voice =>
-              voice.lang.includes('zh-CN') && voice.name.includes(name));
-            if (foundVoice) {
-              chineseVoice = foundVoice;
-              break;
-            }
-          }
-        }
-
-        if (!chineseVoice) {
-          chineseVoice = voices.find(voice =>
-            voice.lang.includes('zh-CN') &&
-            !blacklistedVoices.some(bad => voice.name.includes(bad)));
-        }
-
-        if (!chineseVoice) {
-          chineseVoice = voices.find(voice => voice.lang.includes('zh-CN'));
-        }
-
-        if (chineseVoice) {
-          setLastUsedVoice(`${chineseVoice.name} (${chineseVoice.lang})`);
-          utterance.voice = chineseVoice;
-        }
-      } else if (selectedLanguage === 'zh-HK') {
-        let cantoneseVoice;
-
-        cantoneseVoice = voices.find(voice =>
-          voice.name.includes('Google') && voice.lang.includes('zh-HK'));
-
-        if (!cantoneseVoice) {
-          cantoneseVoice = voices.find(voice =>
-            voice.lang.includes('zh-HK') && (voice.name.includes('Enhanced') || voice.name.includes('Premium')));
-        }
-
-        if (!cantoneseVoice) {
-          const goodCantoneseNames = ['Sin-ji', 'Hong Kong'];
-          for (const name of goodCantoneseNames) {
-            const foundVoice = voices.find(voice =>
-              voice.lang.includes('zh-HK') && voice.name.includes(name));
-            if (foundVoice) {
-              cantoneseVoice = foundVoice;
-              break;
-            }
-          }
-        }
-
-        if (!cantoneseVoice) {
-          cantoneseVoice = voices.find(voice => voice.lang.includes('zh-HK'));
-        }
-
-        if (cantoneseVoice) {
-          setLastUsedVoice(`${cantoneseVoice.name} (${cantoneseVoice.lang})`);
-          utterance.voice = cantoneseVoice;
-        }
-      }
-    } else if (selectedLanguage === 'ko-KR') {
-      const koreanVoice = voices.find(voice => voice.name === 'Google 한국의');
-      if (koreanVoice) {
-        setLastUsedVoice(`${koreanVoice.name} (${koreanVoice.lang})`);
-        utterance.voice = koreanVoice;
-      }
-    } else if (selectedLanguage === 'fr-FR') {
-      let frenchVoice;
-
-      frenchVoice = voices.find(voice =>
-        voice.name.includes('Google') && voice.lang.includes('fr'));
-
-      if (!frenchVoice) {
-        frenchVoice = voices.find(voice =>
-          voice.lang.includes('fr') && (voice.name.includes('Enhanced') || voice.name.includes('Premium')));
-      }
-
-      if (!frenchVoice) {
-        const goodFrenchNames = ['Amelie', 'Thomas', 'Virginie', 'Audrey', 'Marie', 'Paul'];
-        for (const name of goodFrenchNames) {
-          const foundVoice = voices.find(voice =>
-            voice.lang.includes('fr') && voice.name.includes(name));
-          if (foundVoice) {
-            frenchVoice = foundVoice;
-            break;
-          }
-        }
-      }
-
-      if (!frenchVoice) {
-        frenchVoice = voices.find(voice => voice.lang.includes('fr'));
-      }
-
-      if (frenchVoice) {
-        setLastUsedVoice(`${frenchVoice.name} (${frenchVoice.lang})`);
-        utterance.voice = frenchVoice;
-      }
-    } else if (selectedLanguage === 'es-ES') {
-      const spanishVoice = voices.find(voice =>
-        voice.lang.includes('es-') && (voice.name.includes('Google') || voice.name.includes('Enhanced'))
-      );
-      if (spanishVoice) {
-        setLastUsedVoice(`${spanishVoice.name} (${spanishVoice.lang})`);
-        utterance.voice = spanishVoice;
-      }
-    } else if (selectedLanguage === 'he-IL') {
-      let hebrewVoice;
-
-      hebrewVoice = voices.find(voice =>
-        voice.name.includes('Google') && voice.lang.includes('he'));
-
-      if (!hebrewVoice) {
-        hebrewVoice = voices.find(voice =>
-          voice.lang.includes('he') && (voice.name.includes('Enhanced') || voice.name.includes('Premium')));
-      }
-
-      if (!hebrewVoice) {
-        const goodHebrewNames = ['Asaf', 'Carmit', 'Microsoft Asaf', 'Microsoft Carmit', 'Zohar', 'Lior', 'Hebrew', 'Apple Hebrew', 'Siri Hebrew'];
-        for (const name of goodHebrewNames) {
-          const foundVoice = voices.find(voice =>
-            voice.lang.includes('he') && voice.name.includes(name));
-          if (foundVoice) {
-            hebrewVoice = foundVoice;
-            break;
-          }
-        }
-      }
-
-      if (!hebrewVoice) {
-        hebrewVoice = voices.find(voice => voice.lang.includes('he'));
-      }
-
-      if (hebrewVoice) {
-        setLastUsedVoice(`${hebrewVoice.name} (${hebrewVoice.lang})`);
-        utterance.voice = hebrewVoice;
-      }
-    }
-
-    utterance.onend = () => {
-      console.log(`[onend] finished index=${index}, autoAdvance=${autoAdvanceRef.current}`);
-      if (autoAdvanceRef.current) {
-        const nextIndex = index + 1;
-        console.log(`[onend] advancing to nextIndex=${nextIndex}, total=${sentencesRef.current.length}`);
-        if (nextIndex < sentencesRef.current.length) {
-          setTimeout(() => {
-            speakSentenceRef.current(sentencesRef.current[nextIndex], nextIndex);
-          }, 300);
-        }
-      }
+    const next = () => {
+      if (gen !== genRef.current || !playingRef.current) return;
+      speakAtRef.current(safe + 1);
     };
 
-    speechSynthesis.speak(utterance);
+    if (engineRef.current === 'openai') { speakOpenAI(list[safe].text, gen, next); return; }
+
+    const synth = window.speechSynthesis;
+    if (!synth) { flash('This browser has no speech synthesis'); pause(); return; }
+    const u = new SpeechSynthesisUtterance(list[safe].text);
+    const v = pickVoice();
+    if (v) { u.voice = v; u.lang = v.lang; }
+    u.rate = rateRef.current;
+    u.onend = next;
+    u.onerror = (e) => {
+      if (e && (e.error === 'canceled' || e.error === 'interrupted')) return;
+      next();
+    };
+    // A beat of delay keeps Chrome from dropping an utterance queued right after cancel().
+    setTimeout(() => { if (gen === genRef.current && playingRef.current) synth.speak(u); }, 30);
   };
-  speakSentenceRef.current = speakSentence;
+  speakAtRef.current = speakAt;
 
-  console.log(`[render] currentSentenceIndex=${currentSentenceIndex}, sentences.length=${sentences.length}`);
+  const turnTo = (n, back, done) => {
+    if (n < 0 || n >= pagesRef.current.length) return;
+    const apply = () => {
+      pageRef.current = n;
+      setPageIdx(n);
+      unitRef.current = -1;
+      setUnitIdx(-1);
+      setLeaving(null);
+      if (stageRef.current) stageRef.current.scrollTop = 0;
+      savePosition(n, 0);
+      if (done) done();
+    };
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { apply(); return; }
+    setLeaving(back ? 'back' : 'fwd');
+    setTimeout(apply, 230);
+  };
 
-  const mobileBtn = { padding: '8px 12px', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: '600', minHeight: '36px' };
+  const play = () => {
+    ensureAudio();
+    playingRef.current = true;
+    setPlaying(true);
+    speakAt(unitRef.current < 0 ? 0 : unitRef.current);
+  };
+
+  const toggle = () => (playingRef.current ? pause() : play());
+
+  const goPage = (n) => {
+    if (n < 0 || n >= pagesRef.current.length) return;
+    const wasPlaying = playingRef.current;
+    genRef.current++;
+    stopSound();
+    turnTo(n, n < pageRef.current, () => { if (wasPlaying) speakAtRef.current(0); });
+  };
+
+  const goUnit = (delta) => {
+    const list = unitsAt(pageRef.current);
+    const next = (unitRef.current < 0 ? 0 : unitRef.current) + delta;
+    if (next < 0) { if (pageRef.current > 0) goPage(pageRef.current - 1); return; }
+    if (next >= list.length) { goPage(pageRef.current + 1); return; }
+    ensureAudio();
+    playingRef.current = true;
+    setPlaying(true);
+    speakAt(next);
+  };
+
+  /* ---------------------------- loading text ---------------------------- */
+
+  const openText = (newText, name, startAt) => {
+    pause();
+    setText(newText);
+    setDocName(name || null);
+    docNameRef.current = name || null;
+    lsSet('pt.text', newText);
+    lsSet('pt.docName', name || '');
+    const built = paginate(parseDoc(newText), budget);
+    pagesRef.current = built;
+    const pos = startAt || positionFor(name || null);
+    const p = Math.min(Math.max(pos.page || 0, 0), built.length - 1);
+    pageRef.current = p;
+    setPageIdx(p);
+    unitRef.current = -1;
+    setUnitIdx(-1);
+    if (stageRef.current) stageRef.current.scrollTop = 0;
+  };
+
+  const openDoc = async (doc) => {
+    setBusy('Opening…');
+    try {
+      const content = await store.get(doc.name);
+      openText(content, doc.name);
+      setLibOpen(false);
+    } catch (e) {
+      console.error(e);
+      flash('Could not open that article');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const uniqueName = (base, existing) => {
+    const taken = new Set(existing.map((d) => d.name));
+    let name = base + '.txt';
+    let n = 2;
+    while (taken.has(name)) { name = base + '-' + n + '.txt'; n += 1; }
+    return name;
+  };
+
+  // Save text to the library. With no argument it re-saves the open article.
+  const saveDoc = async (content, { open = true } = {}) => {
+    const body = content != null ? content : text;
+    if (!body.trim()) return null;
+    setBusy('Saving…');
+    try {
+      const list = docs.length ? docs : await refreshLibrary();
+      const name = (content == null && docNameRef.current) || uniqueName(slugify(titleOf(body)), list);
+      await store.put(name, body);
+      await refreshLibrary();
+      if (open) { setDocName(name); docNameRef.current = name; lsSet('pt.docName', name); }
+      flash(IS_LOCAL ? 'Saved on this device' : 'Saved to the library');
+      return name;
+    } catch (e) {
+      console.error(e);
+      flash('Save failed: ' + e.message);
+      return null;
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const deleteDoc = async (doc, e) => {
+    e.stopPropagation();
+    if (!window.confirm('Delete "' + doc.title + '" from the library?')) return;
+    setBusy('Deleting…');
+    try {
+      await store.del(doc.name);
+      await refreshLibrary();
+      if (docNameRef.current === doc.name) { setDocName(null); docNameRef.current = null; lsSet('pt.docName', ''); }
+      flash('Deleted');
+    } catch (err) {
+      console.error(err);
+      flash('Delete failed');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const fromClipboard = async ({ append = false, save = false } = {}) => {
+    try {
+      const raw = await navigator.clipboard.readText();
+      if (!raw || !raw.trim()) { flash('Clipboard is empty'); return; }
+      const next = append && text.trim() ? text.trimEnd() + '\n\n' + raw.trim() : raw.trim();
+      openText(next, append ? docNameRef.current : null, append ? undefined : { page: 0, unit: 0 });
+      setPasteOpen(false);
+      if (save) await saveDoc(next, { open: true });
+    } catch (e) {
+      console.error(e);
+      flash('Clipboard blocked — paste into the box instead');
+      setPasteOpen(true);
+    }
+  };
+
+  const loadDraft = async ({ save = false } = {}) => {
+    const body = draft.trim();
+    if (!body) return;
+    openText(body, null, { page: 0, unit: 0 });
+    setPasteOpen(false);
+    setDraft('');
+    if (save) await saveDoc(body, { open: true });
+  };
+
+  /* ------------------------------- effects ------------------------------- */
+
+  // Voice list (arrives asynchronously in Chrome).
+  useEffect(() => {
+    const synth = window.speechSynthesis;
+    if (!synth) return undefined;
+    const load = () => {
+      const list = synth.getVoices() || [];
+      if (!list.length) return;
+      list.sort((a, b) => (/^en/i.test(a.lang) ? 0 : 1) - (/^en/i.test(b.lang) ? 0 : 1) || a.name.localeCompare(b.name));
+      setVoices(list);
+      voicesRef.current = list;
+      if (!voiceRef.current || !list.some((v) => v.voiceURI === voiceRef.current)) {
+        const best =
+          list.find((v) => /^en/i.test(v.lang) && /(Enhanced|Premium)/i.test(v.name)) ||
+          list.find((v) => /^en/i.test(v.lang) && /Google/i.test(v.name)) ||
+          list.find((v) => /^en/i.test(v.lang)) ||
+          list[0];
+        if (best) { setVoiceURI(best.voiceURI); voiceRef.current = best.voiceURI; }
+      }
+    };
+    load();
+    if (synth.addEventListener) synth.addEventListener('voiceschanged', load);
+    return () => { if (synth.removeEventListener) synth.removeEventListener('voiceschanged', load); };
+  }, []);
+
+  // Chrome stops long speech runs unless it is nudged.
+  useEffect(() => {
+    if (!playing || engine !== 'browser') return undefined;
+    if (!/Chrome/.test(navigator.userAgent) || /Edg|OPR/.test(navigator.userAgent)) return undefined;
+    const id = setInterval(() => {
+      const s = window.speechSynthesis;
+      if (s && s.speaking && !s.paused) { s.pause(); s.resume(); }
+    }, 10000);
+    return () => clearInterval(id);
+  }, [playing, engine]);
+
+  // Library on first paint, then restore the last article and its position.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const list = await refreshLibrary();
+      if (cancelled || restoredRef.current) return;
+      restoredRef.current = true;
+      if (!IS_LOCAL) { try { await syncPositions(); } catch { /* offline */ } }
+      const name = lsGet('pt.docName', '') || null;
+      const doc = name && list.find((d) => d.name === name);
+      if (doc) {
+        try {
+          const content = await store.get(doc.name);
+          if (!cancelled) openText(content, doc.name);
+          return;
+        } catch { /* fall through to the cached copy */ }
+      }
+      const pos = positionFor(name);
+      const p = Math.min(Math.max(pos.page || 0, 0), pagesRef.current.length - 1);
+      pageRef.current = p;
+      setPageIdx(p);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep the spoken sentence on screen.
+  useEffect(() => {
+    if (unitIdx < 0 || !sheetRef.current || !stageRef.current) return;
+    const el = sheetRef.current.querySelector('[data-unit="' + unitIdx + '"]');
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const s = stageRef.current.getBoundingClientRect();
+    if (r.top < s.top + 24 || r.bottom > s.bottom - 24) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [unitIdx]);
+
+  // Re-paginating (page length, new text) must not leave us past the end.
+  useEffect(() => {
+    if (pageRef.current > pages.length - 1) {
+      const p = Math.max(0, pages.length - 1);
+      pageRef.current = p;
+      setPageIdx(p);
+    }
+  }, [pages]);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (tag === 'textarea' || tag === 'input' || tag === 'select') return;
+      if (e.key === 'Escape') { setLibOpen(false); setPasteOpen(false); return; }
+      if (e.key === ' ') { e.preventDefault(); toggle(); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); goPage(pageRef.current + 1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); goPage(pageRef.current - 1); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); goUnit(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); goUnit(-1); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const onLeave = () => { stopSound(); if (!IS_LOCAL) syncPositions().catch(() => {}); };
+    window.addEventListener('beforeunload', onLeave);
+    return () => window.removeEventListener('beforeunload', onLeave);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => { lsSet('pt.dark', dark ? '1' : '0'); }, [dark]);
+  useEffect(() => { lsSet('pt.rate', String(rate)); }, [rate]);
+  useEffect(() => { lsSet('pt.budget', String(budget)); }, [budget]);
+  useEffect(() => { lsSet('pt.size', String(size)); }, [size]);
+  useEffect(() => { lsSet('pt.ding', ding ? '1' : '0'); }, [ding]);
+  useEffect(() => { lsSet('pt.voice', voiceURI || ''); }, [voiceURI]);
+  useEffect(() => { lsSet('pt.engine', engine); }, [engine]);
+  useEffect(() => { lsSet('pt.openaiVoice', openaiVoice); }, [openaiVoice]);
+
+  /* ------------------------------ rendering ------------------------------ */
+
+  const page = pages[Math.min(pageIdx, pages.length - 1)] || pages[0];
+  const progress = pages.length ? ((pageIdx + 1) / pages.length) * 100 : 0;
+  const docTitle = (docName && (docs.find((d) => d.name === docName) || {}).title) || titleOf(text);
+  const hasTitleBlock = page.items.some((it) => it.type === 'title');
+
+  const renderPage = () => {
+    const out = [];
+    let n = 0;
+    let listBuf = [];
+    const flushList = (key) => {
+      if (!listBuf.length) return;
+      out.push(<ul className="list" key={'ul' + key}>{listBuf}</ul>);
+      listBuf = [];
+    };
+
+    const sentence = (s, i, k, last) => {
+      const idx = n++;
+      return (
+        <span
+          key={i + '-' + k}
+          className={'s' + (idx === unitIdx ? ' on' : '')}
+          data-unit={idx}
+          role="button"
+          tabIndex={0}
+          onClick={() => { ensureAudio(); playingRef.current = true; setPlaying(true); speakAt(idx); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.click(); } }}
+        >
+          {last ? s : s + ' '}
+        </span>
+      );
+    };
+    const sentencesOf = (it, i) => it.sents.map((s, k) => sentence(s, i, k, k === it.sents.length - 1));
+
+    page.items.forEach((it, i) => {
+      if (it.type !== 'li') flushList(i);
+      if (it.type === 'title') {
+        out.push(<p className="kicker" key={'k' + i}>Now reading</p>);
+        out.push(<h1 className="title" key={i}>{sentencesOf(it, i)}</h1>);
+      } else if (it.type === 'source') {
+        out.push(<p className="source" key={i}>{it.text}</p>);
+      } else if (it.type === 'label') {
+        out.push(<p className="label" key={i}>{it.text}</p>);
+      } else if (it.type === 'rule') {
+        out.push(<hr className="rule" key={i} />);
+      } else if (it.type === 'head') {
+        out.push(React.createElement(it.level <= 1 ? 'h2' : 'h3', { className: 'head', key: i }, sentencesOf(it, i)));
+      } else if (it.type === 'quote') {
+        out.push(<blockquote className="quote" key={i}>{sentencesOf(it, i)}</blockquote>);
+      } else if (it.type === 'li') {
+        listBuf.push(<li className="item" key={i}>{sentencesOf(it, i)}</li>);
+      } else {
+        out.push(<p className={'body' + (it.cont ? ' cont' : '')} key={i}>{sentencesOf(it, i)}</p>);
+      }
+    });
+    flushList('end');
+    return out;
+  };
 
   return (
-    <div style={{ fontFamily: 'system-ui, -apple-system, sans-serif', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: theme.bg, color: theme.text }}>
-      {/* Main content */}
-      <div style={{ flex: 1, padding: isMobile ? '0.5rem' : '1rem', overflowY: 'auto' }}>
-        {!isMobile && <h1>React TTS Component - Multi-Language Test</h1>}
-
-        {/* Text Input Section */}
-      <div style={{ marginBottom: isMobile ? '0.5rem' : '2rem', padding: isMobile ? '0.5rem' : '1rem', border: `2px solid ${theme.sectionBorder}`, borderRadius: '0.5rem', backgroundColor: theme.sectionBg }}>
-        {!isMobile && <h2 style={{ marginTop: 0, color: theme.heading }}>Text-to-Speech Reader</h2>}
-
-        <div style={{ marginBottom: isMobile ? '0.5rem' : '1rem' }}>
-          <textarea
-            ref={textareaRef}
-            placeholder="Paste text here..."
-            value={textareaContent}
-            onChange={handleTextareaChange}
-            onPaste={handleTextareaPaste}
-            style={{
-              width: '100%',
-              minHeight: isMobile ? '60px' : '120px',
-              padding: '0.75rem',
-              border: `1px solid ${theme.inputBorder}`,
-              borderRadius: '0.25rem',
-              fontFamily: 'inherit',
-              fontSize: isMobile ? '16px' : '1rem',
-              resize: 'vertical',
-              boxSizing: 'border-box',
-              backgroundColor: theme.inputBg,
-              color: theme.text
-            }}
-          />
+    <div className={'reader' + (dark ? ' theme-dark' : '')} style={{ '--reader-size': size + 'px' }}>
+      {/* ---------- top bar ---------- */}
+      <header className="top">
+        <button className="btn" onClick={() => { setLibOpen(true); refreshLibrary(); }}>Library</button>
+        <div className="doctitle">
+          {docTitle}
+          {!docName && <em>unsaved</em>}
         </div>
+        <button className="btn" onClick={() => { setDraft(pasteOpen ? '' : text); setPasteOpen((v) => !v); }}>
+          {pasteOpen ? 'Close' : 'Paste'}
+        </button>
+        <button className="btn ghost" onClick={() => setDark((v) => !v)} aria-label="Toggle theme">
+          {dark ? '☀' : '☾'}
+        </button>
+      </header>
 
-        {/* Action buttons - compact on mobile */}
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button onClick={handlePasteFromClipboard} style={{ ...mobileBtn, backgroundColor: '#10B981' }}>
-            Paste
-          </button>
-          <button onClick={handleAppendFromClipboard} style={{ ...mobileBtn, backgroundColor: '#F59E0B' }}>
-            Append
-          </button>
-          {!isMobile && (
-            <>
-              <button onClick={loadFromBlob} disabled={isLoading} style={{ ...mobileBtn, background: 'rgba(76, 175, 80, 0.3)', cursor: isLoading ? 'not-allowed' : 'pointer' }}>
-                {isLoading ? '...' : 'Load'}
-              </button>
-              <button onClick={saveToBlob} disabled={isSaving} style={{ ...mobileBtn, background: 'rgba(76, 175, 80, 0.3)', cursor: isSaving ? 'not-allowed' : 'pointer' }}>
-                {isSaving ? '...' : 'Save'}
-              </button>
-            </>
-          )}
-          <button onClick={() => setFontSize(prev => Math.max(0.5, prev - 0.1))} style={{ ...mobileBtn, background: '#6366f1', padding: '8px 14px' }}>-</button>
-          <button onClick={() => setFontSize(prev => Math.min(3, prev + 0.1))} style={{ ...mobileBtn, background: '#6366f1', padding: '8px 14px' }}>+</button>
-          {!isMobile && (
-            <a href="/youtubetranscriptreader.html" style={{ ...mobileBtn, background: '#6366f1', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }} title="YouTube Transcript Reader">
-              📖▶
-            </a>
-          )}
-        </div>
-
-        {/* Sticky container for navbar + cursive output */}
-        <div style={{ position: 'sticky', top: 0, zIndex: 100, marginTop: '0.75rem' }}>
-
-        {/* Navbar - Row 1: Mode selector + essential controls */}
-        <div style={{
-          display: 'flex', flexDirection: 'column', gap: isMobile ? '6px' : '0',
-          padding: isMobile ? '8px' : '8px 12px',
-          backgroundColor: theme.navbarBg,
-          borderRadius: (interactionMode === 'cursive' || interactionMode === 'chinese') ? '8px 8px 0 0' : '8px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-        }}>
-          {/* Row 1: Mode + Next + Speak */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-            {/* Mode selector as segmented control */}
-            <div style={{ display: 'flex', borderRadius: '6px', overflow: 'hidden', border: '1px solid #ccc' }}>
-              {['tts', 'cursive', 'chinese'].map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => setInteractionMode(mode)}
-                  style={{
-                    padding: isMobile ? '6px 10px' : '4px 10px',
-                    border: 'none', cursor: 'pointer',
-                    fontSize: isMobile ? '13px' : '12px',
-                    fontWeight: interactionMode === mode ? 'bold' : 'normal',
-                    backgroundColor: interactionMode === mode
-                      ? (mode === 'tts' ? '#2563eb' : mode === 'cursive' ? '#8b4513' : '#c41e3a')
-                      : 'transparent',
-                    color: interactionMode === mode ? '#fff' : '#666',
-                  }}
-                >
-                  {mode === 'tts' ? 'TTS' : mode === 'cursive' ? 'Cursive' : 'Chinese'}
-                </button>
-              ))}
-            </div>
-
-            {/* Next sentence button */}
-            <button
-              onClick={() => {
-                const nextIndex = currentSentenceIndex + 1;
-                if (nextIndex < sentences.length) {
-                  setCurrentSentenceIndex(nextIndex);
-                  if (interactionMode === 'cursive') animateCursive(sentences[nextIndex]);
-                  else if (interactionMode === 'chinese') animateHanziSentence(sentences[nextIndex]);
-                  else speakSentence(sentences[nextIndex], nextIndex);
-                }
-              }}
-              disabled={currentSentenceIndex >= sentences.length - 1}
-              style={{ ...mobileBtn, background: '#8b4513', fontSize: isMobile ? '13px' : '12px', padding: isMobile ? '6px 12px' : '4px 8px' }}
-            >
-              Read Next
-            </button>
-
-            {/* Speak button - desktop only */}
-            {!isMobile && (
-              <button onClick={speakCursiveOutput} style={{ ...mobileBtn, backgroundColor: '#10B981', fontSize: '12px', padding: '4px 8px' }}
-                title={localStorage.getItem('OPENAI_API_KEY') ? 'Speak (OpenAI)' : 'Speak (browser)'}
-              >
-                Speak
-              </button>
-            )}
-
-            {/* More toggle on mobile, inline controls on desktop */}
-            {isMobile ? (
-              <button
-                onClick={() => setShowMobileMenu(!showMobileMenu)}
-                style={{ ...mobileBtn, backgroundColor: showMobileMenu ? '#4B5563' : '#6b7280', marginLeft: 'auto', fontSize: '13px', padding: '6px 10px' }}
-              >
-                {showMobileMenu ? 'Less' : 'More'}
-              </button>
-            ) : (
-              <>
-                <span
-                  onClick={() => { setAutoAdvance(false); }}
-                  style={{ fontWeight: 'bold', fontSize: '12px', color: '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: !autoAdvance ? '#ffcdd2' : 'transparent' }}
-                >Stop After Line</span>
-                <label style={{ position: 'relative', display: 'inline-block', width: '50px', height: '24px', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={autoAdvance} onChange={(e) => setAutoAdvance(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
-                  <span style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: autoAdvance ? '#4CAF50' : '#ddd', transition: '.4s', borderRadius: '24px' }}>
-                    <span style={{ position: 'absolute', height: '18px', width: '18px', left: autoAdvance ? '29px' : '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
-                  </span>
-                </label>
-                <span onClick={() => setAutoAdvance(true)} style={{ fontWeight: 'bold', fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#666', cursor: 'pointer', padding: '4px 8px', borderRadius: '4px', backgroundColor: autoAdvance ? '#c8e6c9' : 'transparent' }}>Auto Next Line</span>
-
-                {interactionMode === 'cursive' && (
-                  <>
-                    <label style={{ fontSize: '10px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                      Spd
-                      <input type="range" min="1" max="5" value={cursiveSpeed}
-                        onChange={(e) => { const v = parseInt(e.target.value); setCursiveSpeed(v); localStorage.setItem('tts-cursive-speed', v); }}
-                        style={{ width: '50px', accentColor: '#8b4513' }} />
-                    </label>
-                    <label style={{ fontSize: '10px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '2px' }}>
-                      Size
-                      <input type="range" min="28" max="80" value={cursiveSize}
-                        onChange={(e) => { const v = parseInt(e.target.value); setCursiveSize(v); localStorage.setItem('tts-cursive-size', v); }}
-                        style={{ width: '50px', accentColor: '#8b4513' }} />
-                    </label>
-                  </>
-                )}
-
-                <button onClick={() => setShowSyllables(s => { const next = !s; localStorage.setItem('tts-show-syllables', next); return next; })}
-                  style={{ marginLeft: 'auto', padding: '4px 12px', color: 'white', backgroundColor: showSyllables ? '#6366f1' : '#6b7280', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}
-                  title={showSyllables ? 'Syllables ON' : 'Show syllable breaks'}
-                >
-                  {showSyllables ? 'Syl: ON' : 'Syl'}
-                </button>
-
-                <button onClick={handlePasteFromClipboard} style={{ padding: '4px 12px', color: 'white', backgroundColor: '#10B981', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}>
-                  Paste from Clipboard
-                </button>
-
-                <span onClick={handleDarkModeToggle} style={{ padding: '4px 12px', color: 'white', backgroundColor: darkMode ? '#f59e0b' : '#374151', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: '600', userSelect: 'none' }}>
-                  {darkMode ? 'Light' : 'Dark'}
-                </span>
-
-                <button onClick={() => { const next = ttsEngine === 'browser' ? 'openai' : 'browser'; setTtsEngine(next); localStorage.setItem('appTtsEngine', next); }}
-                  style={{ padding: '4px 12px', color: 'white', backgroundColor: ttsEngine === 'openai' ? '#16a34a' : '#6b7280', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: '600' }}
-                  title={ttsEngine === 'openai' ? 'Using OpenAI TTS' : 'Using browser TTS'}
-                >
-                  {ttsEngine === 'openai' ? 'AI' : 'TTS'}
-                </button>
-
-                {ttsEngine === 'openai' && (
-                  <>
-                    <select value={openaiVoice} onChange={(e) => { setOpenaiVoice(e.target.value); localStorage.setItem('appOpenaiVoice', e.target.value); }}
-                      style={{ padding: '2px 6px', fontSize: '12px', borderRadius: '4px', border: '1px solid #22c55e', backgroundColor: '#f0fdf4', color: '#166534' }}>
-                      <option value="onyx">Onyx</option><option value="nova">Nova</option><option value="alloy">Alloy</option>
-                      <option value="echo">Echo</option><option value="fable">Fable</option><option value="shimmer">Shimmer</option>
-                    </select>
-                    <button onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-                      style={{ padding: '4px 8px', fontSize: '12px', fontWeight: '600', borderRadius: '4px', border: 'none', cursor: 'pointer', backgroundColor: localStorage.getItem('OPENAI_API_KEY') ? '#dcfce7' : '#fee2e2', color: localStorage.getItem('OPENAI_API_KEY') ? '#166534' : '#991b1b' }}>
-                      Key
-                    </button>
-                    {showApiKeyInput && (
-                      <input type="text" placeholder="sk-..." value={apiKeyValue}
-                        onFocus={() => { if (apiKeyValue.startsWith('••••')) setApiKeyValue(''); }}
-                        onChange={(e) => setApiKeyValue(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter' && apiKeyValue && !apiKeyValue.startsWith('••••')) { localStorage.setItem('OPENAI_API_KEY', apiKeyValue); setApiKeyValue('••••' + apiKeyValue.slice(-4)); setShowApiKeyInput(false); } }}
-                        onBlur={() => { if (apiKeyValue && !apiKeyValue.startsWith('••••')) { localStorage.setItem('OPENAI_API_KEY', apiKeyValue); setApiKeyValue('••••' + apiKeyValue.slice(-4)); } }}
-                        style={{ padding: '2px 8px', fontSize: '12px', borderRadius: '4px', border: '1px solid #22c55e', width: '150px' }}
-                      />
-                    )}
-                  </>
-                )}
-              </>
-            )}
+      {/* ---------- paste panel ---------- */}
+      {pasteOpen && (
+        <section className="paste">
+          <label htmlFor="draft">
+            Line 1 is the title, an optional URL line can follow, blank lines separate paragraphs.
+            Markdown headings, lists and quotes from the Page Scraper extension are understood.
+          </label>
+          <textarea id="draft" value={draft} spellCheck={false} onChange={(e) => setDraft(e.target.value)} placeholder="Paste a scraped article here…" />
+          <div className="row">
+            <button className="btn accent" onClick={() => loadDraft({ save: true })} disabled={!draft.trim()}>Read &amp; save</button>
+            <button className="btn" onClick={() => loadDraft()} disabled={!draft.trim()}>Read only</button>
+            <button className="btn" onClick={() => fromClipboard({ save: true })}>From clipboard</button>
+            <button className="btn" onClick={() => fromClipboard({ append: true })}>Append clipboard</button>
+            <span className="hint">{IS_LOCAL ? 'Local dev: the library lives in this browser.' : 'Saved articles sync through Vercel Blob.'}</span>
           </div>
-
-          {/* Mobile expanded menu */}
-          {isMobile && showMobileMenu && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '6px', borderTop: '1px solid #ddd' }}>
-              {/* Auto-advance toggle */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '13px', color: theme.text }}>Auto-advance:</span>
-                <label style={{ position: 'relative', display: 'inline-block', width: '44px', height: '24px', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={autoAdvance} onChange={(e) => setAutoAdvance(e.target.checked)} style={{ opacity: 0, width: 0, height: 0 }} />
-                  <span style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: autoAdvance ? '#4CAF50' : '#ddd', transition: '.4s', borderRadius: '24px' }}>
-                    <span style={{ position: 'absolute', height: '18px', width: '18px', left: autoAdvance ? '23px' : '3px', bottom: '3px', backgroundColor: 'white', transition: '.4s', borderRadius: '50%', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
-                  </span>
-                </label>
-                <span style={{ fontSize: '12px', color: autoAdvance ? '#4CAF50' : '#999' }}>{autoAdvance ? 'ON' : 'OFF'}</span>
-              </div>
-
-              {/* Cursive sliders */}
-              {interactionMode === 'cursive' && (
-                <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                  <label style={{ fontSize: '12px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '4px', flex: 1 }}>
-                    Speed
-                    <input type="range" min="1" max="5" value={cursiveSpeed}
-                      onChange={(e) => { const v = parseInt(e.target.value); setCursiveSpeed(v); localStorage.setItem('tts-cursive-speed', v); }}
-                      style={{ flex: 1, accentColor: '#8b4513' }} />
-                  </label>
-                  <label style={{ fontSize: '12px', color: '#8b4513', display: 'flex', alignItems: 'center', gap: '4px', flex: 1 }}>
-                    Size
-                    <input type="range" min="28" max="80" value={cursiveSize}
-                      onChange={(e) => { const v = parseInt(e.target.value); setCursiveSize(v); localStorage.setItem('tts-cursive-size', v); }}
-                      style={{ flex: 1, accentColor: '#8b4513' }} />
-                  </label>
-                </div>
-              )}
-
-              {/* Secondary buttons row */}
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                <button onClick={() => setShowSyllables(s => { const next = !s; localStorage.setItem('tts-show-syllables', next); return next; })}
-                  style={{ ...mobileBtn, backgroundColor: showSyllables ? '#6366f1' : '#6b7280', fontSize: '12px', padding: '6px 10px' }}>
-                  {showSyllables ? 'Syl: ON' : 'Syl'}
-                </button>
-                <span onClick={handleDarkModeToggle} style={{ ...mobileBtn, backgroundColor: darkMode ? '#f59e0b' : '#374151', fontSize: '12px', padding: '6px 10px', userSelect: 'none' }}>
-                  {darkMode ? 'Light' : 'Dark'}
-                </span>
-                <button onClick={() => { const next = ttsEngine === 'browser' ? 'openai' : 'browser'; setTtsEngine(next); localStorage.setItem('appTtsEngine', next); }}
-                  style={{ ...mobileBtn, backgroundColor: ttsEngine === 'openai' ? '#16a34a' : '#6b7280', fontSize: '12px', padding: '6px 10px' }}>
-                  {ttsEngine === 'openai' ? 'AI TTS' : 'Browser TTS'}
-                </button>
-                <a href="/youtubetranscriptreader.html" style={{ ...mobileBtn, background: '#6366f1', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', fontSize: '12px', padding: '6px 10px' }}>
-                  📖▶
-                </a>
-              </div>
-
-              {/* Language & rate */}
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)}
-                  style={{ flex: 1, padding: '6px', border: `1px solid ${theme.inputBorder}`, borderRadius: '6px', backgroundColor: theme.inputBg, color: theme.text, fontSize: '14px' }}>
-                  <option value="zh-HK">Cantonese</option><option value="en-US">English</option><option value="fr-FR">French</option>
-                  <option value="es-ES">Spanish</option><option value="zh-CN">Mandarin</option><option value="ko-KR">Korean</option><option value="he-IL">Hebrew</option>
-                </select>
-                <select value={speechRate} onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
-                  style={{ padding: '6px', border: `1px solid ${theme.inputBorder}`, borderRadius: '6px', backgroundColor: theme.inputBg, color: theme.text, fontSize: '14px' }}>
-                  <option value="1">1x</option><option value="1.5">1.5x</option><option value="0.7">0.7x</option>
-                </select>
-              </div>
-
-              {/* OpenAI settings if active */}
-              {ttsEngine === 'openai' && (
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  <select value={openaiVoice} onChange={(e) => { setOpenaiVoice(e.target.value); localStorage.setItem('appOpenaiVoice', e.target.value); }}
-                    style={{ padding: '6px', fontSize: '13px', borderRadius: '6px', border: '1px solid #22c55e', backgroundColor: '#f0fdf4', color: '#166534' }}>
-                    <option value="onyx">Onyx</option><option value="nova">Nova</option><option value="alloy">Alloy</option>
-                    <option value="echo">Echo</option><option value="fable">Fable</option><option value="shimmer">Shimmer</option>
-                  </select>
-                  <button onClick={() => setShowApiKeyInput(!showApiKeyInput)}
-                    style={{ ...mobileBtn, fontSize: '12px', padding: '6px 10px', backgroundColor: localStorage.getItem('OPENAI_API_KEY') ? '#dcfce7' : '#fee2e2', color: localStorage.getItem('OPENAI_API_KEY') ? '#166534' : '#991b1b' }}>
-                    Key
-                  </button>
-                  {showApiKeyInput && (
-                    <input type="text" placeholder="sk-..." value={apiKeyValue}
-                      onFocus={() => { if (apiKeyValue.startsWith('••••')) setApiKeyValue(''); }}
-                      onChange={(e) => setApiKeyValue(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' && apiKeyValue && !apiKeyValue.startsWith('••••')) { localStorage.setItem('OPENAI_API_KEY', apiKeyValue); setApiKeyValue('••••' + apiKeyValue.slice(-4)); setShowApiKeyInput(false); } }}
-                      onBlur={() => { if (apiKeyValue && !apiKeyValue.startsWith('••••')) { localStorage.setItem('OPENAI_API_KEY', apiKeyValue); setApiKeyValue('••••' + apiKeyValue.slice(-4)); } }}
-                      style={{ flex: 1, padding: '6px', fontSize: '14px', borderRadius: '6px', border: '1px solid #22c55e' }}
-                    />
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Cursive output area - inside sticky container */}
-        {interactionMode === 'cursive' && (
-          <div style={{
-            padding: isMobile ? '16px' : '24px',
-            background: '#f5f0e8',
-            backgroundImage: 'repeating-linear-gradient(transparent, transparent 31px, #c9b99a 31px, #c9b99a 32px)',
-            borderRadius: '0 0 8px 8px',
-            border: '2px solid #c9b99a',
-            borderTop: 'none',
-            minHeight: isMobile ? '40vh' : '150px',
-            ...(isMobile ? {} : { maxHeight: '300px', overflowY: 'auto' }),
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
-          }}>
-            <div
-              ref={cursiveOutputRef}
-              style={{
-                fontFamily: "'Alex Brush', cursive",
-                fontSize: (isMobile ? Math.min(cursiveSize, 40) : cursiveSize) + 'px',
-                lineHeight: 1.4,
-                color: '#1a1209',
-                wordBreak: 'break-word',
-                width: '100%'
-              }}
-            />
-          </div>
-        )}
-
-        {/* Chinese (Hanzi Writer) output area - inside sticky container */}
-        {interactionMode === 'chinese' && (
-          <div style={{
-            padding: isMobile ? '12px' : '16px 24px',
-            background: '#faf8f3',
-            borderRadius: '0 0 8px 8px',
-            border: '2px solid #c9b99a',
-            borderTop: 'none',
-            minHeight: '150px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
-          }}>
-            {/* Tile rail */}
-            {hanziChars.length > 0 && (
-              <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', padding: '8px', background: '#f1ede4', borderRadius: '8px', marginBottom: '12px', alignItems: 'center' }}>
-                {hanziChars.map((ch, i) => (
-                  <button
-                    key={i}
-                    onClick={() => { setHanziActiveIdx(i); buildHanziWriter(ch, true); }}
-                    style={{
-                      fontSize: '24px', lineHeight: 1, padding: '8px 12px',
-                      background: i === hanziActiveIdx ? '#8b4513' : '#fff',
-                      color: i === hanziActiveIdx ? '#fff' : '#1a1209',
-                      border: i === hanziActiveIdx ? '2px solid #8b4513' : '1px solid #d8cfbb',
-                      borderRadius: '8px', cursor: 'pointer', flexShrink: 0,
-                      transform: i === hanziActiveIdx ? 'translateY(-1px)' : 'none',
-                      transition: 'all 0.12s'
-                    }}
-                  >{ch}</button>
-                ))}
-                <span style={{ fontSize: '13px', color: '#6b6457', marginLeft: '8px', whiteSpace: 'nowrap' }}>
-                  {hanziActiveIdx + 1} / {hanziChars.length}
-                </span>
-              </div>
-            )}
-            {/* Writer canvas */}
-            <div style={{ display: 'flex', justifyContent: 'center', background: '#f1ede4', borderRadius: '12px', padding: isMobile ? '8px' : '16px', marginBottom: '10px' }}>
-              <div
-                ref={hanziTargetRef}
-                style={{
-                  width: '280px', height: '280px',
-                  background: '#fff', borderRadius: '8px',
-                  backgroundImage: 'linear-gradient(to right, #d8cfbb 0.5px, transparent 0.5px), linear-gradient(to bottom, #d8cfbb 0.5px, transparent 0.5px)',
-                  backgroundSize: '140px 140px',
-                  backgroundPosition: 'center center'
-                }}
-              />
-            </div>
-            {/* Speed slider */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '13px', color: '#6b6457' }}>
-              <span>Speed</span>
-              <input type="range" min="0.3" max="3" step="0.1" value={hanziSpeed}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  setHanziSpeed(v);
-                  localStorage.setItem('tts-hanzi-speed', String(v));
-                  if (hanziWriterRef.current && hanziWriterRef.current._options) {
-                    hanziWriterRef.current._options.strokeAnimationSpeed = v;
-                  }
-                }}
-                style={{ flex: 1, accentColor: '#8b4513' }}
-              />
-              <span style={{ fontWeight: 500, minWidth: '40px', textAlign: 'right' }}>{hanziSpeed.toFixed(1)}×</span>
-            </div>
-            {hanziChars.length === 0 && (
-              <div style={{ textAlign: 'center', color: '#6b6457', fontSize: '14px', padding: '40px 0' }}>
-                Click a sentence below to animate its Chinese characters
-              </div>
-            )}
-          </div>
-        )}
-        </div>{/* end sticky container */}
-
-        {/* Reading Area - Clickable Sentence List */}
-        {sentences.length > 0 && (
-          <div style={{ marginTop: isMobile ? '0.75rem' : '1.5rem' }}>
-            {!isMobile && <h3 style={{ color: theme.heading }}>Click any sentence to {interactionMode === 'cursive' ? 'write it in cursive' : interactionMode === 'chinese' ? 'animate its characters' : 'read it aloud'}:</h3>}
-            <div style={{
-              backgroundColor: theme.cardBg,
-              border: `2px solid ${theme.cardBorder}`,
-              borderRadius: '0.5rem',
-              padding: isMobile ? '0.75rem' : '1.5rem',
-              minHeight: isMobile ? '100px' : '200px',
-              fontSize: `${fontSize}rem`,
-              lineHeight: '1.8'
-            }}>
-              {sentences.map((sentence, index) => (
-                <div
-                  key={index}
-                  ref={el => sentenceRefs.current[index] = el}
-                  onClick={() => {
-                    setCurrentSentenceIndex(index);
-                    if (interactionMode === 'cursive') {
-                      animateCursive(sentence);
-                    } else if (interactionMode === 'chinese') {
-                      animateHanziSentence(sentence);
-                    } else {
-                      speakSentence(sentence, index);
-                    }
-                  }}
-                  style={{
-                    padding: isMobile ? '0.5rem' : '0.75rem',
-                    marginBottom: '0.5rem',
-                    cursor: 'pointer',
-                    borderRadius: '0.25rem',
-                    backgroundColor: currentSentenceIndex === index ? theme.highlight : 'transparent',
-                    transition: 'background-color 0.2s',
-                    fontWeight: currentSentenceIndex === index ? 'bold' : 'normal',
-                    boxShadow: currentSentenceIndex === index ? `0 0 5px ${theme.highlight}80` : 'none',
-                    color: currentSentenceIndex === index ? '#000' : theme.text
-                  }}
-                >
-                  {showSyllables ? syllabifyText(sentence) : sentence}.
-                </div>
-              ))}
-            </div>
-            <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: theme.textSecondary }}>
-              {sentences.length} sentences detected
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Controls - desktop only */}
-      {!isMobile && (
-        <div style={{ marginBottom: '1rem', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <select id="languageSelect" value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)}
-            style={{ padding: '0.5rem', border: `1px solid ${theme.inputBorder}`, borderRadius: '0.25rem', backgroundColor: theme.inputBg, color: theme.text }}>
-            <option value="zh-HK">Cantonese</option><option value="en-US">English</option><option value="fr-FR">French</option>
-            <option value="es-ES">Spanish</option><option value="zh-CN">Mandarin</option><option value="ko-KR">Korean</option><option value="he-IL">Hebrew</option>
-          </select>
-          <select id="rateSelect" value={speechRate} onChange={(e) => setSpeechRate(parseFloat(e.target.value))}
-            style={{ padding: '0.5rem', border: `1px solid ${theme.inputBorder}`, borderRadius: '0.25rem', backgroundColor: theme.inputBg, color: theme.text }}>
-            <option value="1">1x</option><option value="1.5">1.5x</option><option value="0.7">0.7x</option>
-          </select>
-        </div>
+        </section>
       )}
 
-        {/* Debug Info - desktop only */}
-        {!isMobile && (
-          <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: theme.textSecondary }}>
-            <p>Available voices: {availableVoices.length}</p>
-            <p>Current language: {selectedLanguage}</p>
-            <p>Speech rate: {speechRate}x</p>
-            <p><strong>Last Used Voice:</strong> <span style={{color: '#2563eb', fontWeight: 'bold'}}>{lastUsedVoice}</span></p>
+      {/* ---------- library ---------- */}
+      {libOpen && (
+        <>
+          <div className="scrim" onClick={() => setLibOpen(false)} />
+          <aside className="drawer">
+            <header>
+              <h2>Library</h2>
+              <button className="btn ghost" onClick={() => setLibOpen(false)}>Close</button>
+            </header>
+            <div className="actions">
+              <button className="btn accent" onClick={() => fromClipboard({ save: true })}>Add from clipboard</button>
+              <button className="btn" onClick={() => saveDoc()} disabled={!text.trim()}>Save current</button>
+              <button className="btn sm" onClick={refreshLibrary}>Refresh</button>
+            </div>
+            <div className="list">
+              {!docs.length && (
+                <p className="empty">
+                  Nothing saved yet. Scrape an article with Alt+Shift+S, then press <strong>Add from clipboard</strong>.
+                  {IS_LOCAL && <><br /><br />On localhost the library is stored in this browser, not in Vercel Blob.</>}
+                </p>
+              )}
+              {docs.map((d) => {
+                const pos = positionFor(d.name);
+                const est = d.name === docName ? pages.length : Math.max(1, Math.ceil((d.chars || 0) / budget));
+                const pct = Math.min(100, Math.round(((pos.page || 0) + 1) / est * 100));
+                const chars = d.chars || 0;
+                const charLabel = chars >= 1000 ? (chars / 1000).toFixed(1) + 'k chars' : chars + ' chars';
+                return (
+                  <div
+                    className={'doc' + (d.name === docName ? ' active' : '')}
+                    key={d.name}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openDoc(d)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') openDoc(d); }}
+                  >
+                    <div className="meta">
+                      <div className="name">{d.title}</div>
+                      <div className="sub">
+                        {charLabel} · {d.name === docName ? '' : 'about '}{est} page{est === 1 ? '' : 's'}
+                        {d.updatedAt ? ' · ' + new Date(d.updatedAt).toLocaleDateString() : ''}
+                        {pos.page ? ' · on page ' + ((pos.page || 0) + 1) : ''}
+                      </div>
+                      {pos.page > 0 && <div className="bar"><i style={{ width: pct + '%' }} /></div>}
+                    </div>
+                    <button className="btn sm danger" onClick={(e) => deleteDoc(d, e)} aria-label={'Delete ' + d.title}>Delete</button>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        </>
+      )}
+
+      {/* ---------- the page ---------- */}
+      <main className="stage" ref={stageRef}>
+        <article className={'sheet' + (leaving ? ' leaving' : '') + (leaving === 'back' ? ' back' : '')} ref={sheetRef}>
+          {!hasTitleBlock && <p className="kicker">Continued</p>}
+          {renderPage()}
+          <div className="folio">
+            <span>{docName ? 'Library' : 'Unsaved'}</span>
+            <span>{pageIdx + 1} / {pages.length}</span>
           </div>
-        )}
-      </div>
+        </article>
+      </main>
+
+      {/* ---------- transport ---------- */}
+      <footer className="bar">
+        <div className="progress" aria-hidden="true"><i style={{ width: progress + '%' }} /></div>
+        <div className="controls">
+          <button className="tbtn" onClick={() => goPage(pageIdx - 1)} disabled={pageIdx === 0} aria-label="Previous page">
+            <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zM9.5 12 18 6v12z" /></svg>
+          </button>
+          <button className="tbtn play" onClick={toggle} aria-label={playing ? 'Pause' : 'Play'}>
+            {playing
+              ? <svg viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z" /></svg>
+              : <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>}
+          </button>
+          <button className="tbtn" onClick={() => goPage(pageIdx + 1)} disabled={pageIdx >= pages.length - 1} aria-label="Next page">
+            <svg viewBox="0 0 24 24"><path d="M16 6h2v12h-2zM6 18V6l8.5 6z" /></svg>
+          </button>
+          <button className="tbtn more" onClick={() => setOptsOpen((v) => !v)} aria-label="Reading settings" aria-expanded={optsOpen}>
+            <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4z" /></svg>
+          </button>
+          <div className="counter">{busy || 'Page ' + (pageIdx + 1) + ' of ' + pages.length}</div>
+          <div className={'opts' + (optsOpen ? ' open' : '')}>
+            <label>
+              Engine
+              <select value={engine} onChange={(e) => { setEngine(e.target.value); engineRef.current = e.target.value; }}>
+                <option value="browser">Browser</option>
+                <option value="openai">OpenAI</option>
+              </select>
+            </label>
+            {engine === 'browser' ? (
+              <label>
+                Voice
+                <select
+                  value={voiceURI || ''}
+                  onChange={(e) => { setVoiceURI(e.target.value); voiceRef.current = e.target.value; if (playingRef.current) speakAt(unitRef.current); }}
+                >
+                  {voices.map((v) => <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>)}
+                </select>
+              </label>
+            ) : (
+              <>
+                <label>
+                  Voice
+                  <select value={openaiVoice} onChange={(e) => { setOpenaiVoice(e.target.value); openaiVoiceRef.current = e.target.value; }}>
+                    {['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'].map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Key
+                  <button
+                    className="btn sm"
+                    onClick={() => {
+                      const k = window.prompt('OpenAI API key (kept in this browser only):', lsGet('OPENAI_API_KEY', '') || '');
+                      if (k !== null) { lsSet('OPENAI_API_KEY', k.trim()); flash(k.trim() ? 'Key saved in this browser' : 'Key cleared'); }
+                    }}
+                  >
+                    {lsGet('OPENAI_API_KEY', '') ? 'Change' : 'Add'}
+                  </button>
+                </label>
+              </>
+            )}
+            <label>
+              Speed
+              <select
+                value={String(rate)}
+                onChange={(e) => { const v = parseFloat(e.target.value); setRate(v); rateRef.current = v; if (playingRef.current && engineRef.current === 'browser') speakAt(unitRef.current); }}
+              >
+                {['0.8', '0.9', '1', '1.15', '1.3', '1.5', '1.8'].map((v) => <option key={v} value={v}>{v}x</option>)}
+              </select>
+            </label>
+            <label>
+              Page
+              <select value={String(budget)} onChange={(e) => setBudget(parseInt(e.target.value, 10))}>
+                <option value="550">Short</option>
+                <option value="950">Medium</option>
+                <option value="1500">Long</option>
+              </select>
+            </label>
+            <label>
+              Text
+              <select value={String(size)} onChange={(e) => setSize(parseInt(e.target.value, 10))}>
+                <option value="18">Small</option>
+                <option value="21">Normal</option>
+                <option value="24">Large</option>
+                <option value="28">Larger</option>
+              </select>
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={ding} onChange={(e) => { setDing(e.target.checked); dingRef.current = e.target.checked; }} />
+              Ding
+            </label>
+          </div>
+        </div>
+      </footer>
+
+      {toast && <div className="toast">{toast}</div>}
     </div>
   );
 };
 
-export default TextToSpeechComponent;
+export default PageTurnerReader;

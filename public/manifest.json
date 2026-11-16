@@ -1,6 +1,6 @@
 {
-  "short_name": "TTS Reader",
-  "name": "Text-to-Speech Reader",
+  "short_name": "Page Turner",
+  "name": "Page Turner \u2014 read aloud reader",
   "icons": [
     {
       "src": "favicon.ico",
@@ -10,6 +10,6 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#3B82F6",
-  "background_color": "#ffffff"
+  "theme_color": "#fbfbf8",
+  "background_color": "#e6e7e3"
 }

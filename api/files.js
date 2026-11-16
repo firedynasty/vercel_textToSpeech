@@ -18,9 +18,44 @@ export default async function handler(req, res) {
   }
 
   try {
-    // GET - List all files and their contents (no auth required)
+    // GET - three modes:
+    //   ?meta=1            -> light listing (name, size, date, title) for the library
+    //   ?filename=foo.txt  -> one file's content
+    //   (no query)         -> every file with its content (kept for older clients)
     if (req.method === 'GET') {
+      const { meta, filename } = req.query;
+
+      if (filename) {
+        const { blobs } = await list({ prefix: `tts-docs/${filename}` });
+        const blob = blobs.find((b) => b.pathname === `tts-docs/${filename}`);
+        if (!blob) return res.status(404).json({ error: 'File not found' });
+        const content = await (await fetch(blob.url)).text();
+        return res.status(200).json({ filename, content, uploadedAt: blob.uploadedAt });
+      }
+
       const { blobs } = await list({ prefix: 'tts-docs/' });
+
+      if (meta) {
+        // Read only the first few hundred bytes of each file to get its title line.
+        const files = await Promise.all(blobs.map(async (blob) => {
+          const name = blob.pathname.replace('tts-docs/', '');
+          let title = '';
+          try {
+            const head = await fetch(blob.url, { headers: { Range: 'bytes=0-400' } });
+            const chunk = await head.text();
+            title = (chunk.split('\n').find((l) => l.trim()) || '').replace(/^#{1,6}\s+/, '').trim().slice(0, 110);
+          } catch (err) {
+            console.error(`Could not read the title of ${name}:`, err);
+          }
+          return {
+            name,
+            title: title || name.replace(/\.txt$/, '').replace(/-/g, ' '),
+            size: blob.size,
+            uploadedAt: blob.uploadedAt,
+          };
+        }));
+        return res.status(200).json({ files });
+      }
 
       // Fetch content for each blob
       const files = {};
@@ -29,8 +64,8 @@ export default async function handler(req, res) {
           const response = await fetch(blob.url);
           const content = await response.text();
           // Remove 'tts-docs/' prefix from pathname for display
-          const filename = blob.pathname.replace('tts-docs/', '');
-          files[filename] = content;
+          const filename2 = blob.pathname.replace('tts-docs/', '');
+          files[filename2] = content;
         } catch (err) {
           console.error(`Error fetching ${blob.pathname}:`, err);
         }
@@ -67,6 +102,7 @@ export default async function handler(req, res) {
       const blob = await put(`tts-docs/${filename}`, content, {
         access: 'public',
         addRandomSuffix: false, // Keep exact filename
+        allowOverwrite: true, // Saving the same article again replaces it
       });
 
       console.log(`File saved: ${filename} (${content.length} chars)`);
