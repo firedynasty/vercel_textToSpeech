@@ -187,6 +187,17 @@ body { background: var(--desk); }
   padding: 9px 16px; border-radius: 999px; box-shadow: 0 10px 30px -10px rgba(0,0,0,.6);
 }
 
+/* A deliberate selection matches the reading highlight rather than the browser's
+   blue, so it never reads as a second kind of "the voice is here". */
+::selection { background: var(--hl); color: var(--ink); }
+::-moz-selection { background: var(--hl); color: var(--ink); }
+
+/* On a touch screen a long-press selects the sentence you meant to tap, and
+   copying from the sheet is rare, so selection is off there. */
+@media (pointer: coarse) {
+  .sheet .s { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+
 button:focus-visible, select:focus-visible, textarea:focus-visible, .s:focus-visible, .doc:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }

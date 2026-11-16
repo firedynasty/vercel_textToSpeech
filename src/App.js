@@ -801,6 +801,9 @@ const PageTurnerReader = () => {
           data-unit={idx}
           role="button"
           tabIndex={0}
+          // Tapping sentences is the main gesture here, so a quick second or third
+          // tap must not select the word or the paragraph. Drag-select still works.
+          onMouseDown={(e) => { if (e.detail > 1) e.preventDefault(); }}
           onClick={() => { ensureAudio(); playingRef.current = true; setPlaying(true); speakAt(idx); }}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.click(); } }}
         >
