@@ -272,8 +272,12 @@ function silentTrackURL() {
 
 /* ============================== storage =============================== */
 
-const IS_LOCAL = typeof window !== 'undefined' &&
+// Set by local_reader/server.py (`openpageturner`): the library is a folder on this Mac,
+// reached through the same /api/files interface as Vercel Blob.
+const FOLDER = (typeof window !== 'undefined' && window.__PAGE_TURNER_FOLDER__) || null;
+const IS_LOCAL = !FOLDER && typeof window !== 'undefined' &&
   (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+const NEW_EXT = FOLDER ? '.md' : '.txt';
 const ACCESS_CODE = IS_LOCAL ? 'localhost' : '123';
 const POS_FILE = 'reading-positions.json';
 
@@ -311,7 +315,7 @@ const blobStore = {
     const data = await r.json();
     return (data.files || [])
       .filter((f) => f.name !== POS_FILE)
-      .map((f) => ({ name: f.name, title: f.title || f.name.replace(/\.txt$/, ''), chars: f.size || 0, updatedAt: f.uploadedAt }));
+      .map((f) => ({ name: f.name, title: f.title || f.name.replace(/\.(txt|md)$/i, ''), chars: f.size || 0, updatedAt: f.uploadedAt }));
   },
   async get(name) {
     const r = await fetch('/api/files?filename=' + encodeURIComponent(name));
@@ -714,9 +718,9 @@ const PageTurnerReader = () => {
 
   const uniqueName = (base, existing) => {
     const taken = new Set(existing.map((d) => d.name));
-    let name = base + '.txt';
+    let name = base + NEW_EXT;
     let n = 2;
-    while (taken.has(name)) { name = base + '-' + n + '.txt'; n += 1; }
+    while (taken.has(name)) { name = base + '-' + n + NEW_EXT; n += 1; }
     return name;
   };
 
@@ -731,7 +735,7 @@ const PageTurnerReader = () => {
       await store.put(name, body);
       await refreshLibrary();
       if (open) { setDocName(name); docNameRef.current = name; lsSet('pt.docName', name); }
-      flash(IS_LOCAL ? 'Saved on this device' : 'Saved to the library');
+      flash(FOLDER ? 'Saved ' + name : IS_LOCAL ? 'Saved on this device' : 'Saved to the library');
       return name;
     } catch (e) {
       console.error(e);
@@ -771,7 +775,7 @@ const PageTurnerReader = () => {
 
   const deleteDoc = async (doc, e) => {
     e.stopPropagation();
-    if (!window.confirm('Delete "' + doc.title + '" from the library?')) return;
+    if (!window.confirm(FOLDER ? 'Move ' + doc.name + ' to the Trash?' : 'Delete "' + doc.title + '" from the library?')) return;
     setBusy('Deleting…');
     try {
       await store.del(doc.name);
@@ -1136,7 +1140,7 @@ const PageTurnerReader = () => {
             <button className="btn" onClick={() => loadDraft()} disabled={!draft.trim()}>Read only</button>
             <button className="btn" onClick={() => fromClipboard({ save: true })}>From clipboard</button>
             <button className="btn" onClick={() => fromClipboard({ append: true })}>Append clipboard</button>
-            <span className="hint">{IS_LOCAL ? 'Local dev: the library lives in this browser.' : 'Saved articles sync through Vercel Blob.'}</span>
+            <span className="hint">{FOLDER ? 'Saved as .md files in ' + FOLDER.name : IS_LOCAL ? 'Local dev: the library lives in this browser.' : 'Saved articles sync through Vercel Blob.'}</span>
           </div>
         </section>
       )}
@@ -1147,7 +1151,7 @@ const PageTurnerReader = () => {
           <div className="scrim" onClick={() => setLibOpen(false)} />
           <aside className="drawer">
             <header>
-              <h2>Library</h2>
+              <h2 title={FOLDER ? FOLDER.name : undefined}>{FOLDER ? FOLDER.name.split('/').pop() || 'Library' : 'Library'}</h2>
               <button className="btn ghost" onClick={() => setLibOpen(false)}>Close</button>
             </header>
             <div className="actions">

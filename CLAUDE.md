@@ -48,6 +48,16 @@ device opens on another. On `localhost` the same interface is backed by `localSt
 Reading position per article is stored in `localStorage` and merged into a shared
 `reading-positions.json` blob (debounced, newest-wins per article) so position follows the device.
 
+### Folder mode (`openpageturner`)
+
+`local_reader/server.py` serves `build/` and answers the same `/api/files` requests from a
+folder on disk, so the library is plain files instead of Blob. It injects
+`window.__PAGE_TURNER_FOLDER__` into `index.html`; `App.js` sees it as `FOLDER`, uses the
+`/api/files` store, and names new saves `.md`. Only top-level `.md`/`.txt` files are listed,
+Delete moves to the macOS Trash, positions go to `reading-positions.json` in the folder. Each
+folder gets a stable port (so localStorage settings persist); `--stop`/`--status` manage it.
+Standard library only. Rebuild (`npm run build`) after changing `src/`.
+
 ### Where text comes from
 
 The `page-scraper` Chrome extension (Alt+Shift+S) copies an article as `Title / URL / markdown
